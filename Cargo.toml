@@ -1,0 +1,6 @@
+[package]
+name = "go-gc"
+version = "0.1.0"
+authors = ["Tinco Andringa <mail@tinco.nl>"]
+
+[dependencies]
