@@ -3,21 +3,58 @@
 // license that can be found in the LICENSE file.
 // Copyright 2018 Tinco Andringa.
 
+#![feature(async_await)]
+#![feature(futures_api)]
+#![feature(await_macro)]
+#![feature(pin)]
+#![feature(arbitrary_self_types)]
+
+use futures::*;
+use futures::sync::oneshot;
+use std::pin::PinMut;
+
+struct FuturesFuture<'a, F: 'a> {
+    future: &'a mut F
+}
+
+impl<'a, F: Future<Item=T, Error=E>, T, E> std::future::Future for FuturesFuture<'a, F> {
+    type Output = Result<T, E>;
+
+    #[inline]
+    fn poll(self: PinMut<Self>, _cx: &mut std::task::Context) -> std::task::Poll<Result<T,E>> {
+        match PinMut::get_mut(self).future.poll() {
+            Ok(result) => match result {
+                Async::Ready(item) => std::task::Poll::Ready(Ok(item)),
+                Async::NotReady   => std::task::Poll::Pending,
+            },
+            Err(err) => std::task::Poll::Ready(Err(err)),
+        }
+    }
+}
+
 // gcenable is called after the bulk of the runtime initialization,
 // just before we're about to start letting user code run.
 // It kicks off the background sweeper goroutine and enables GC.
-pub fn gc_enable() {
-	// c := make(chan int, 1)
-	// go bgsweep(c)
-	// <-c // this makes it wait for the goroutine to have finished acquiring a lock
+pub async fn gc_enable() {
+    let (signal_setup_done, mut setup_done) = oneshot::channel::<bool>();
+
+    async {
+        background_sweep(signal_setup_done);
+    };
+
+    let f = FuturesFuture { future: &mut setup_done };
+
+    await!(f);
 }
 
-pub fn background_sweep() {
+fn background_sweep(signal_setup_done: oneshot::Sender<bool>) {
 	// sweep.g = getg()
-    //
 	// lock(&sweep.lock)
 	// sweep.parked = true
-	// c <- 1
+
+
+    // c <- 1
+    let _ = signal_setup_done.send(true);
 
 	// goparkunlock(&sweep.lock, waitReasonGCSweepWait, traceEvGoBlock, 1)
     // for { // forever do
