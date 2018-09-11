@@ -9,28 +9,9 @@
 #![feature(pin)]
 #![feature(arbitrary_self_types)]
 
-use futures::*;
 use futures::sync::oneshot;
-use std::pin::PinMut;
+use futures_future::futures_future;
 
-struct FuturesFuture<'a, F: 'a> {
-    future: &'a mut F
-}
-
-impl<'a, F: Future<Item=T, Error=E>, T, E> std::future::Future for FuturesFuture<'a, F> {
-    type Output = Result<T, E>;
-
-    #[inline]
-    fn poll(self: PinMut<Self>, _cx: &mut std::task::Context) -> std::task::Poll<Result<T,E>> {
-        match PinMut::get_mut(self).future.poll() {
-            Ok(result) => match result {
-                Async::Ready(item) => std::task::Poll::Ready(Ok(item)),
-                Async::NotReady   => std::task::Poll::Pending,
-            },
-            Err(err) => std::task::Poll::Ready(Err(err)),
-        }
-    }
-}
 
 // gcenable is called after the bulk of the runtime initialization,
 // just before we're about to start letting user code run.
@@ -42,7 +23,7 @@ pub async fn gc_enable() {
         background_sweep(signal_setup_done);
     };
 
-    let f = FuturesFuture { future: &mut setup_done };
+    let f = futures_future(&mut setup_done);
 
     await!(f);
 }
