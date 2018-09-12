@@ -11,7 +11,42 @@
 
 use futures::sync::oneshot;
 use futures_future::futures_future;
+use std::sync::{Arc, Mutex};
 
+// State of background sweep.
+pub struct SweepData {
+	parked:  bool,
+	started: bool,
+
+    // We can't background sweep until the gc is ready
+    gcReadyReceiver: oneshot::Receiver<bool>,
+    gcReadySender: oneshot::Sender<bool>,
+
+    // bookkeeping numbers
+	background_sweeps: u32,
+	sweep_pauses:  u32,
+}
+
+impl SweepData {
+    fn park(&mut self) {
+        self.parked = true;
+    }
+}
+
+pub fn new_sweep() -> SweepData {
+    let (gcReadySender, gcReadyReceiver) = oneshot::channel::<bool>();
+
+    SweepData {
+        parked: false,
+        started: false,
+        gcReadyReceiver: gcReadyReceiver,
+        gcReadySender: gcReadySender,
+        background_sweeps: 0,
+        sweep_pauses: 0,
+    }
+}
+
+type SweepReference = Arc<Mutex<SweepData>>;
 
 // gcenable is called after the bulk of the runtime initialization,
 // just before we're about to start letting user code run.
@@ -19,25 +54,29 @@ use futures_future::futures_future;
 pub async fn gc_enable() {
     let (signal_setup_done, mut setup_done) = oneshot::channel::<bool>();
 
-    async {
-        background_sweep(signal_setup_done);
-    };
+    // TODO we should get sweep from a global GC object
+    let sweep = Arc::new(Mutex::new(new_sweep()));
+
+    background_sweep(sweep.clone(), signal_setup_done);
 
     let f = futures_future(&mut setup_done);
 
     await!(f);
 }
 
-fn background_sweep(signal_setup_done: oneshot::Sender<bool>) {
-	// sweep.g = getg()
-	// lock(&sweep.lock)
-	// sweep.parked = true
+async fn background_sweep(sweep: SweepReference, signal_setup_done: oneshot::Sender<bool>) {
+    let mut sweep = sweep.lock().expect("Could not get lock on SweepData");
+    sweep.park();
 
-
-    // c <- 1
     let _ = signal_setup_done.send(true);
 
+    // So at this point the thread 'parks' itself until the first GC sweep wakes it up.
 	// goparkunlock(&sweep.lock, waitReasonGCSweepWait, traceEvGoBlock, 1)
+    // sweep.unlock();
+    // await!(sweep.gc_ready())
+
+
+
     // for { // forever do
     // we sweep one and then yield to other goroutines until sweepone returns FFFFFFF
 	// 	for gosweepone() != ^uintptr(0) { // if gosweepone != complement of 0 (so FFF?)
