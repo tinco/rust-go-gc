@@ -19,8 +19,7 @@ pub struct SweepData {
 	started: bool,
 
     // We can't background sweep until the gc is ready
-    gcReadyReceiver: oneshot::Receiver<bool>,
-    gcReadySender: oneshot::Sender<bool>,
+    gc_ready_sender: Option<oneshot::Sender<bool>>,
 
     // bookkeeping numbers
 	background_sweeps: u32,
@@ -31,16 +30,20 @@ impl SweepData {
     fn park(&mut self) {
         self.parked = true;
     }
+
+    fn wait_for_gc_start(&mut self) -> oneshot::Receiver<bool> {
+        let (gc_ready_sender, gc_ready_receiver) = oneshot::channel::<bool>();
+        self.gc_ready_sender = Some(gc_ready_sender);
+        gc_ready_receiver
+    }
 }
 
 pub fn new_sweep() -> SweepData {
-    let (gcReadySender, gcReadyReceiver) = oneshot::channel::<bool>();
 
     SweepData {
         parked: false,
         started: false,
-        gcReadyReceiver: gcReadyReceiver,
-        gcReadySender: gcReadySender,
+        gc_ready_sender: None,
         background_sweeps: 0,
         sweep_pauses: 0,
     }
@@ -65,17 +68,16 @@ pub async fn gc_enable() {
 }
 
 async fn background_sweep(sweep: SweepReference, signal_setup_done: oneshot::Sender<bool>) {
-    let mut sweep = sweep.lock().expect("Could not get lock on SweepData");
-    sweep.park();
+    let mut gc_ready = {
+        let mut sweep = sweep.lock().expect("Could not get lock on SweepData");
+        sweep.park();
 
-    let _ = signal_setup_done.send(true);
+        let _ = signal_setup_done.send(true);
 
-    // So at this point the thread 'parks' itself until the first GC sweep wakes it up.
-	// goparkunlock(&sweep.lock, waitReasonGCSweepWait, traceEvGoBlock, 1)
-    // sweep.unlock();
-    // await!(sweep.gc_ready())
+        sweep.wait_for_gc_start()
+    };
 
-
+    await!(futures_future(&mut gc_ready));
 
     // for { // forever do
     // we sweep one and then yield to other goroutines until sweepone returns FFFFFFF
