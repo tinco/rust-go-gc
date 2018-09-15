@@ -10,10 +10,11 @@
 #![feature(arbitrary_self_types)]
 #![feature(generators)]
 
-use futures::sync::oneshot;
+use futures::sync::{oneshot, mpsc};
+use futures::stream::Stream;
 use futures_future::futures_future;
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 
 // Main malloc heap.
 // The heap itself is the "free[]" and "large" arrays,
@@ -30,7 +31,7 @@ pub struct MemoryHeap {
     // busy      [_MaxMHeapList]mSpanList // busy lists of large spans of given length
     // busylarge mSpanList                // busy lists of large spans length >= _MaxMHeapList
     sweep_generation:  u32,                   // sweep generation, see comment in mspan
-    sweep_done: AtomicUsize,              // all spans are swept
+    sweep_done: AtomicBool,              // all spans are swept
     sweepers: AtomicUsize                 // number of active sweepone calls
     //
     // // allspans is a slice of all mspans ever created. Each mspan
@@ -154,7 +155,7 @@ pub struct MemoryHeap {
 
 pub fn new_memory_heap() -> MemoryHeap {
     MemoryHeap {
-        sweep_done: AtomicUsize::new(0),
+        sweep_done: AtomicBool::new(false),
         sweepers: AtomicUsize::new(0),
         sweep_generation: 0,
     }
@@ -166,7 +167,7 @@ pub struct BackgroundSweep {
     // started: bool,
 
     // We can't background sweep until the gc is ready
-    gc_ready_sender: Mutex<Option<oneshot::Sender<bool>>>,
+    unpark_sender: Mutex<Option<mpsc::Sender<bool>>>,
 
     // bookkeeping numbers
     //TODO in Go these are regular u32's, but they're being modified without
@@ -177,12 +178,12 @@ pub struct BackgroundSweep {
 }
 
 impl BackgroundSweep {
-    fn wait_for_gc_start(&self) -> oneshot::Receiver<bool> {
-        let (gc_ready_sender, gc_ready_receiver) = oneshot::channel::<bool>();
-        let mut sender_field = self.gc_ready_sender.lock()
+    fn wait_for_unpark(&self) -> mpsc::Receiver<bool> {
+        let (unpark_sender, unpark_receiver) = mpsc::channel::<bool>(0);
+        let mut sender_field = self.unpark_sender.lock()
             .expect("Could not get ready sender lock");
-        *sender_field = Some(gc_ready_sender);
-        gc_ready_receiver
+        *sender_field = Some(unpark_sender);
+        unpark_receiver
     }
 }
 
@@ -190,7 +191,7 @@ pub fn new_sweep() -> BackgroundSweep {
     BackgroundSweep {
         parked: Mutex::new(false),
         // started: false,
-        gc_ready_sender: Mutex::new(None),
+        unpark_sender: Mutex::new(None),
         number: AtomicUsize::new(0),
         sweep_pauses: AtomicUsize::new(0),
     }
@@ -225,16 +226,17 @@ impl GC {
     async fn background_sweep(&mut self, signal_setup_done: oneshot::Sender<bool>) {
         // This assignment is to a block, so that the lock is released at the end of it and
         // we can safely wait for something to signal us that the gc is ready.
-        let mut gc_ready = {
+        let unpark = {
             let mut sweep_parked = self.background_sweep.parked.lock().expect("Could not get lock on SweepData");
             *sweep_parked = true;
 
             let _ = signal_setup_done.send(true);
 
-            self.background_sweep.wait_for_gc_start()
+            self.background_sweep.wait_for_unpark()
         };
 
-        await!(futures_future(&mut gc_ready));
+        let mut unpark_future = unpark.into_future();
+        await!(futures_future(&mut unpark_future));
 
         loop {
             // we sweep one and then yield to other goroutines until sweepone returns FFFFFFF
@@ -243,22 +245,49 @@ impl GC {
                 yield
             }
 
-            // If gosweepone returned FFFFF we freeSomeWbufs until that returns false, yielding in between
-            // 	for freeSomeWbufs(true) {	// 		Gosched()}
-            // Then we get the sweep lock
-            // 	lock(&sweep.lock)
-            //
-            // 	if !gosweepdone() {
-            // 		// This can happen if a GC runs between
-            // 		// gosweepone returning ^0 above
-            // 		// and the lock being acquired.
-            // 		unlock(&sweep.lock)
-            // 		continue
-            // 	}
-            // 	sweep.parked = true
-            // 	goparkunlock(&sweep.lock, waitReasonGCSweepWait, traceEvGoBlock, 1)
+            while self.free_some_work_buffers(true) { yield }
+
+            let mut sweep_parked = self.background_sweep.parked.lock()
+                .expect("Could not get background sweeper parked lock");
+
+        	if !self.memory_heap.sweep_done.load(Ordering::Relaxed) {
+        		// This can happen if a GC runs between
+        		// sweep_one returning !0 above
+        		// and the lock being acquired.
+        		continue
+        	}
+
+            *sweep_parked = true;
+            await!(futures_future(&mut unpark_future));
         }
     }
+
+    // freeSomeWbufs frees some workbufs back to the heap and returns
+    // true if it should be called again to free more.
+    fn free_some_work_buffers(&self, preemptible: bool) -> bool {
+    	let batch_size = 64; // ~1–2 µs per span.
+    	// lock(&work.wbufSpans.lock)
+    	// if gcphase != _GCoff || work.wbufSpans.free.isEmpty() {
+    	// 	unlock(&work.wbufSpans.lock)
+    	// 	return false
+    	// }
+    	// systemstack(func() {
+    	// 	gp := getg().m.curg
+    	// 	for i := 0; i < batchSize && !(preemptible && gp.preempt); i++ {
+    	// 		span := work.wbufSpans.free.first
+    	// 		if span == nil {
+    	// 			break
+    	// 		}
+    	// 		work.wbufSpans.free.remove(span)
+    	// 		mheap_.freeManual(span, &memstats.gc_sys)
+    	// 	}
+    	// })
+    	// more := !work.wbufSpans.free.isEmpty()
+    	// unlock(&work.wbufSpans.lock)
+    	// return more
+        false
+    }
+
 
     // sweeps one span
     // returns number of pages returned to heap, or !0 if there is nothing to sweep
@@ -272,7 +301,7 @@ impl GC {
         // thread we don't have to worry about that.
 
         // TODO: I think go:nowritebarrier means the ordering here can be Relaxed, is that correct?
-        return if self.memory_heap.sweep_done.load(Ordering::Relaxed) != 0 {
+        return if self.memory_heap.sweep_done.load(Ordering::Relaxed) {
             !0
         } else {
 
