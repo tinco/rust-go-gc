@@ -1,5 +1,5 @@
 [package]
-name = "go-gc"
+name = "go_gc"
 version = "0.1.0"
 authors = ["Tinco Andringa <mail@tinco.nl>"]
 edition = '2018'

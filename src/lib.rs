@@ -10,11 +10,14 @@
 #![feature(arbitrary_self_types)]
 #![feature(generators)]
 
+mod sweep_buffer;
+
 use futures::sync::{oneshot, mpsc};
 use futures::stream::Stream;
 use futures_future::futures_future;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
+
 
 // Main malloc heap.
 // The heap itself is the "free[]" and "large" arrays,
@@ -30,9 +33,10 @@ pub struct MemoryHeap {
     // freelarge mTreap                   // free treap of length >= _MaxMHeapList
     // busy      [_MaxMHeapList]mSpanList // busy lists of large spans of given length
     // busylarge mSpanList                // busy lists of large spans length >= _MaxMHeapList
-    sweep_generation:  u32,                   // sweep generation, see comment in mspan
+    // TODO these should all be u32 for locality optimization?
+    sweep_generation:  AtomicUsize,       // sweep generation, see comment in mspan, is increased by 2 after every GC
     sweep_done: AtomicBool,              // all spans are swept
-    sweepers: AtomicUsize                 // number of active sweepone calls
+    sweepers: AtomicUsize,                 // number of active sweepone calls
     //
     // // allspans is a slice of all mspans ever created. Each mspan
     // // appears exactly once.
@@ -58,16 +62,18 @@ pub struct MemoryHeap {
     // // mapped. cap(spans) indicates the total reserved memory.
     // spans []*mspan
     //
-    // // sweepSpans contains two mspan stacks: one of swept in-use
-    // // spans, and one of unswept in-use spans. These two trade
-    // // roles on each GC cycle. Since the sweepgen increases by 2
-    // // on each cycle, this means the swept spans are in
-    // // sweepSpans[sweepgen/2%2] and the unswept spans are in
-    // // sweepSpans[1-sweepgen/2%2]. Sweeping pops spans from the
-    // // unswept stack and pushes spans that are still in-use on the
-    // // swept stack. Likewise, allocating an in-use span pushes it
-    // // on the swept stack.
-    // sweepSpans [2]gcSweepBuf
+
+    // sweep_buffers contains two mspan stacks: one of swept in-use
+    // spans, and one of unswept in-use spans. These two trade
+    // roles on each GC cycle. Since the sweepgen increases by 2
+    // on each cycle, this means the swept spans are in
+    // sweep_buffers[sweepgen/2%2] and the unswept spans are in
+    // sweep_buffers[1-sweepgen/2%2]. Sweeping pops spans from the
+    // unswept stack and pushes spans that are still in-use on the
+    // swept stack. Likewise, allocating an in-use span pushes it
+    // on the swept stack.
+    sweep_buffers: [sweep_buffer::SweepBuffer;2],
+
     //
     // _ uint32 // align uint64 fields on 32-bit for atomics
     //
@@ -153,11 +159,30 @@ pub struct MemoryHeap {
     // speciallock           mutex    // lock for special record allocators.
 }
 
+impl MemoryHeap {
+    pub fn get_pushable_sweep_buffer(&self, generation: usize) -> &sweep_buffer::PushableSweepBuffer {
+        unsafe {
+            std::mem::transmute::<
+                &sweep_buffer::SweepBuffer,
+                &sweep_buffer::PushableSweepBuffer>(&self.sweep_buffers[generation/2%2])
+        }
+    }
+
+    pub fn get_popable_sweep_buffer(&self, generation: usize) -> &sweep_buffer::PopableSweepBuffer {
+        unsafe {
+            std::mem::transmute::<
+                &sweep_buffer::SweepBuffer,
+                &sweep_buffer::PopableSweepBuffer>(&self.sweep_buffers[1 - generation/2%2])
+        }
+    }
+}
+
 pub fn new_memory_heap() -> MemoryHeap {
     MemoryHeap {
         sweep_done: AtomicBool::new(false),
         sweepers: AtomicUsize::new(0),
-        sweep_generation: 0,
+        sweep_generation: AtomicUsize::new(0),
+        sweep_buffers: [sweep_buffer::SweepBuffer{}, sweep_buffer::SweepBuffer{}],
     }
 }
 
@@ -304,10 +329,9 @@ impl GC {
         return if self.memory_heap.sweep_done.load(Ordering::Relaxed) {
             !0
         } else {
-
             self.memory_heap.sweepers.fetch_add(1, Ordering::Relaxed);
             let number_of_pages : usize = !0;
-            let sweep_generation = self.memory_heap.sweep_generation;
+            let sweep_generation = self.memory_heap.sweep_generation.load(Ordering::Relaxed);
 
             loop {
                 // let sweep = self.memory_heap.sweep_spans.get(1 - sweep_generation / 2 % 2).pop();
