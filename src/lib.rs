@@ -20,7 +20,7 @@ use futures::sync::{oneshot, mpsc};
 use futures::stream::Stream;
 use futures_future::futures_future;
 use std::sync::{Mutex};
-use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use self::memory_heap::*;
 
@@ -198,6 +198,7 @@ impl GC {
                 // 		npages = 0
                 // 	}
                 // 	break
+                break
             }
             //
             // // Decrement the number of active sweepers and if this is the

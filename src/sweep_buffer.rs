@@ -3,6 +3,7 @@ use super::memory_span::*;
 use std::sync::atomic::{AtomicUsize, AtomicPtr, Ordering};
 use std::sync::{Mutex};
 use std::alloc::*;
+use std::mem;
 
 const GC_SWEEP_BLOCK_ENTRIES: usize = 512; // 4KB on 64-bit
 const GC_SWEEP_BUF_INIT_SPINE_CAP: usize = 256; // Enough for 1GB heap on 64-bit
@@ -92,14 +93,14 @@ impl PushableSweepBuffer {
     	// Do we need to add a block?
         let mut spine_length = self.0.spine_length.load(Ordering::Relaxed);
         let block : SweepBlock = loop {
-            if(top < spine_length) {
+            if top < spine_length {
                 // 		spine := atomic.Loadp(unsafe.Pointer(&b.spine))
                 // 		blockp := add(spine, sys.PtrSize*top)
                 // 		block = (*gcSweepBlock)(atomic.Loadp(blockp))
             } else {
             	// Add a new block to the spine, potentially growing
                 // the spine.
-                let spine_cap = *self.0.spine_cap.lock().expect("Could not unlock spine cap");
+                let mut spine_cap = *self.0.spine_cap.lock().expect("Could not unlock spine cap");
          		// spine_length cannot change until we release the lock,
          		// but may have changed while we were waiting.
                 spine_length = self.0.spine_length.load(Ordering::Relaxed);
@@ -114,19 +115,25 @@ impl PushableSweepBuffer {
                         	GC_SWEEP_BUF_INIT_SPINE_CAP
                         };
 
-                        // TODO newSpine := persistentalloc(newCap*sys.PtrSize, sys.CacheLineSize, &memstats.gc_sys)
+                        let layout = Layout::array::<SweepBlock>(new_cap).expect("Could not layout spine");
+
+                        // TODO: Blocks are allocated off-heap, so no write barriers.
+                        // TODO: new_spine = persistent_alloc(new_cap*sys.PtrSize, sys.CacheLineSize,
+                        // &memstats.gc_sys)
                         let mut new_spine = unsafe {
-                            alloc(Layout::array::<SweepBlock>(new_cap).expect("Could not layout spine"))
+                            let mut spine = mem::transmute::<*mut SweepBlock, *mut u8>(self.0.spine.load(Ordering::Relaxed));
+                            mem::transmute::<*mut u8, *mut SweepBlock>(
+                                if spine_cap == 0 {
+                                    alloc(layout)
+                                } else {
+                                    realloc(spine, layout, spine_cap)
+                                }
+                            )
                         };
 
-                        if spine_cap != 0 {
-            				// Blocks are allocated off-heap, so
-            				// no write barriers.
-            			    // memmove(newSpine, b.spine, b.spineCap*sys.PtrSize)
-            			}
-            			// // Spine is allocated off-heap, so no write barrier.
-            			// atomic.StorepNoWB(unsafe.Pointer(&b.spine), newSpine)
-            			// b.spineCap = newCap
+                        // TODO: Spine is allocated off-heap, so no write barrier.
+                        self.0.spine.store(new_spine, Ordering::Relaxed);
+                        spine_cap = new_cap;
             			// We can't immediately free the old spine
             			// since a concurrent push with a lower index
             			// could still be reading from it. We let it
@@ -137,18 +144,18 @@ impl PushableSweepBuffer {
             		}
 
             		// Allocate a new block and add it to the spine.
-            		// block = (*gcSweepBlock)(persistentalloc(unsafe.Sizeof(gcSweepBlock{}), sys.CacheLineSize, &memstats.gc_sys))
-            		// blockp := add(b.spine, sys.PtrSize*top)
-            		// // Blocks are allocated off-heap, so no write barrier.
-            		// atomic.StorepNoWB(blockp, unsafe.Pointer(block))
-            		// atomic.Storeuintptr(&b.spineLen, spineLen+1)
-            		// unlock(&b.spineLock)
+            		unsafe {
+                        let block = mem::transmute::<*mut u8, SweepBlock>(alloc(Layout::new::<SweepBlockData>()));
+                        let block_ptr = self.0.spine.load(Ordering::Relaxed).offset(top as isize);
+                		// Blocks are allocated off-heap, so no write barrier.
+                        let block_ptr_atomic : AtomicPtr<SweepBlockData> = mem::transmute(block_ptr);
+                        block_ptr_atomic.store(block, Ordering::Relaxed);
+                        self.0.spine_length.fetch_add(1, Ordering::Relaxed);
+                    };
                 }
             }
         };
-        //
-        // 	// We have a block. Insert the span.
-        // 	block.spans[bottom] = s
+    	// We have a block. Insert the span.
         block.spans[bottom] = span;
     }
 }
