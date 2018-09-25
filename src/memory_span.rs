@@ -1,4 +1,5 @@
-//go:notinheap
+use std::ptr::Unique;
+
 pub struct MemorySpanData {
 	// next *mspan     // next span in list, or nil if none
 	// prev *mspan     // previous span in list, or nil if none
@@ -86,4 +87,4 @@ pub struct MemorySpanData {
 	// specials    *special   // linked list of special records sorted by offset.
 }
 
-pub type MemorySpan = &'static MemorySpanData;
+pub type MemorySpan = Unique<MemorySpanData>;

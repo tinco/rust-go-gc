@@ -38,7 +38,7 @@ pub struct SweepBuffer {
 }
 
 pub struct SweepBlockData {
-    spans: [MemorySpan; GC_SWEEP_BLOCK_ENTRIES]
+    spans: [Option<MemorySpan>; GC_SWEEP_BLOCK_ENTRIES]
 }
 
 pub type SweepBlock = Unique<SweepBlockData>;
@@ -50,6 +50,16 @@ impl SweepBuffer {
             spine_length: AtomicUsize::new(0),
             spine_cap: Mutex::new(0),
             spine: Default::default(),
+        }
+    }
+
+    #[inline]
+    fn get_spine_block(&self, top: usize) -> SweepBlock {
+        unsafe {
+            let spine_block_ptr_ref = self.spine.load(Ordering::Relaxed).offset(top as isize);
+            let spine_block_ptr : AtomicPtr<u8> = mem::transmute(spine_block_ptr_ref);
+            let block = spine_block_ptr.load(Ordering::Relaxed);
+            Unique::new(mem::transmute(block)).expect("SweepBuffer had null pointer block")
         }
     }
 }
@@ -67,18 +77,17 @@ impl PopableSweepBuffer {
             self.0.index.fetch_add(1, Ordering::Relaxed);
             None
         } else {
-            // let cursor = cursor - 1; // fetch_sub returns old cursor
+            let cursor = cursor - 1; // fetch_sub returns old cursor
             // There are no concurrent spine or block modifications during
             // pop, so we can omit the atomics.
             // TODO Unfortunately it's unstable to read atomics unatomically in Rust do this later?
-            // let (top, bottom) = (cursor / GC_SWEEP_BLOCK_ENTRIES, cursor % GC_SWEEP_BLOCK_ENTRIES);
-            // blockp := (**gcSweepBlock)(b.spine + sys.PtrSize*uintptr(top)))
-            // block := *blockp
-            // s := block.spans[bottom]
-            // // Clear the pointer for block(i).
-            // block.spans[bottom] = nil
-            // return s
-            None
+            let (top, bottom) = (cursor / GC_SWEEP_BLOCK_ENTRIES, cursor % GC_SWEEP_BLOCK_ENTRIES);
+            let mut block = self.0.get_spine_block(top);
+            let mut_block = unsafe { block.as_mut() };
+            let span = mut_block.spans[bottom];
+            // Clear the pointer for block(i)
+            mut_block.spans[bottom] = None;
+            span
         }
     }
 }
@@ -93,7 +102,7 @@ impl PushableSweepBuffer {
         let mut spine_length = self.0.spine_length.load(Ordering::Relaxed);
         let mut block : SweepBlock = loop {
             if top < spine_length {
-                break self.get_spine_block(top);
+                break self.0.get_spine_block(top);
             } else {
                 let spine_cap = self.0.spine_cap.lock().expect("Could not unlock spine cap");
                 // spine_length cannot change until we release the lock,
@@ -107,7 +116,7 @@ impl PushableSweepBuffer {
             }
         };
 
-        unsafe { block.as_mut() }.spans[bottom] = span;
+        unsafe { block.as_mut() }.spans[bottom] = Some(span);
     }
 
     fn allocate_block(&self, spine_length: usize, mut spine_cap: MutexGuard<usize>, top: usize) -> SweepBlock {
@@ -124,15 +133,6 @@ impl PushableSweepBuffer {
             spine_block_ptr.store(block, Ordering::Relaxed);
             self.0.spine_length.fetch_add(1, Ordering::Relaxed);
             Unique::new(mem::transmute(block)).expect("SweepBuffer could not allocate block")
-        }
-    }
-
-    fn get_spine_block(&self, top: usize) -> SweepBlock {
-        unsafe {
-            let spine_block_ptr_ref = self.0.spine.load(Ordering::Relaxed).offset(top as isize);
-            let spine_block_ptr : AtomicPtr<u8> = mem::transmute(spine_block_ptr_ref);
-            let block = spine_block_ptr.load(Ordering::Relaxed);
-            Unique::new(mem::transmute(block)).expect("SweepBuffer had null pointer block")
         }
     }
 
