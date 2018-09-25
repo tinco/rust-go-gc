@@ -10,7 +10,7 @@
 #![feature(arbitrary_self_types)]
 #![feature(generators)]
 #![feature(allocator_api)]
-
+#![feature(ptr_internals)]
 
 mod memory_span;
 mod sweep_buffer;

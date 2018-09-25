@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicUsize, AtomicPtr, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::alloc::*;
 use std::mem;
+use std::ptr::Unique;
 
 const GC_SWEEP_BLOCK_ENTRIES: usize = 512; // 4KB on 64-bit
 const GC_SWEEP_BUF_INIT_SPINE_CAP: usize = 256; // Enough for 1GB heap on 64-bit
@@ -40,7 +41,7 @@ pub struct SweepBlockData {
     spans: [MemorySpan; GC_SWEEP_BLOCK_ENTRIES]
 }
 
-pub type SweepBlock = &'static mut SweepBlockData;
+pub type SweepBlock = Unique<SweepBlockData>;
 
 impl SweepBuffer {
     pub fn new() -> SweepBuffer {
@@ -90,7 +91,7 @@ impl PushableSweepBuffer {
         let (top, bottom) = (cursor / GC_SWEEP_BLOCK_ENTRIES, cursor % GC_SWEEP_BLOCK_ENTRIES);
 
         let mut spine_length = self.0.spine_length.load(Ordering::Relaxed);
-        let block : SweepBlock = loop {
+        let mut block : SweepBlock = loop {
             if top < spine_length {
                 break self.get_spine_block(top);
             } else {
@@ -106,7 +107,7 @@ impl PushableSweepBuffer {
             }
         };
 
-        block.spans[bottom] = span;
+        unsafe { block.as_mut() }.spans[bottom] = span;
     }
 
     fn allocate_block(&self, spine_length: usize, mut spine_cap: MutexGuard<usize>, top: usize) -> SweepBlock {
@@ -122,7 +123,7 @@ impl PushableSweepBuffer {
             // Blocks are allocated off-heap, so no write barrier.
             spine_block_ptr.store(block, Ordering::Relaxed);
             self.0.spine_length.fetch_add(1, Ordering::Relaxed);
-            mem::transmute(block)
+            Unique::new(mem::transmute(block)).expect("SweepBuffer could not allocate block")
         }
     }
 
@@ -131,7 +132,7 @@ impl PushableSweepBuffer {
             let spine_block_ptr_ref = self.0.spine.load(Ordering::Relaxed).offset(top as isize);
             let spine_block_ptr : AtomicPtr<u8> = mem::transmute(spine_block_ptr_ref);
             let block = spine_block_ptr.load(Ordering::Relaxed);
-            mem::transmute(block)
+            Unique::new(mem::transmute(block)).expect("SweepBuffer had null pointer block")
         }
     }
 
