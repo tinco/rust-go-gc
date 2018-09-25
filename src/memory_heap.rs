@@ -16,7 +16,7 @@ pub struct MemoryHeap {
     // freelarge mTreap                   // free treap of length >= _MaxMHeapList
     // busy      [_MaxMHeapList]mSpanList // busy lists of large spans of given length
     // busylarge mSpanList                // busy lists of large spans length >= _MaxMHeapList
-    // TODO these should all be u32 for locality optimization?
+    // TODO these should all be u32!
     pub sweep_generation:  AtomicUsize,       // sweep generation, see comment in mspan, is increased by 2 after every GC
     pub sweep_done: AtomicBool,              // all spans are swept
     pub sweepers: AtomicUsize,                 // number of active sweepone calls
