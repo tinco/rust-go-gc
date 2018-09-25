@@ -23,6 +23,7 @@ use std::sync::{Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use self::memory_heap::*;
+pub use self::sweep_buffer::*;
 
 // State of background sweep.
 pub struct BackgroundSweep {

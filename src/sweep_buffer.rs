@@ -1,7 +1,7 @@
 
 use super::memory_span::*;
 use std::sync::atomic::{AtomicUsize, AtomicPtr, Ordering};
-use std::sync::{Mutex};
+use std::sync::{Mutex, MutexGuard};
 use std::alloc::*;
 use std::mem;
 
@@ -33,7 +33,7 @@ pub struct SweepBuffer {
     pub index: AtomicUsize,
     pub spine_length: AtomicUsize, // Spine array length, accessed atomically
     pub spine_cap: Mutex<usize>, // Spine array cap, accessed under lock
-    pub spine: AtomicPtr<SweepBlock>, // TODO write persistentalloc for possibly more performance
+    pub spine: AtomicPtr<SweepBlock>, // Spine is a pointer to an array of atomic pointers to SweepBlockData
 }
 
 pub struct SweepBlockData {
@@ -66,11 +66,11 @@ impl PopableSweepBuffer {
             self.0.index.fetch_add(1, Ordering::Relaxed);
             None
         } else {
-            let cursor = cursor - 1; // fetch_sub returns old cursor
+            // let cursor = cursor - 1; // fetch_sub returns old cursor
             // There are no concurrent spine or block modifications during
             // pop, so we can omit the atomics.
             // TODO Unfortunately it's unstable to read atomics unatomically in Rust do this later?
-            let (top, bottom) = (cursor / GC_SWEEP_BLOCK_ENTRIES, cursor % GC_SWEEP_BLOCK_ENTRIES);
+            // let (top, bottom) = (cursor / GC_SWEEP_BLOCK_ENTRIES, cursor % GC_SWEEP_BLOCK_ENTRIES);
             // blockp := (**gcSweepBlock)(b.spine + sys.PtrSize*uintptr(top)))
             // block := *blockp
             // s := block.spans[bottom]
@@ -86,76 +86,85 @@ impl PushableSweepBuffer {
     // push adds span s to buffer b. push is safe to call concurrently
     // with other push operations, but NOT to call concurrently with pop.
     pub fn push(&self, span: MemorySpan) {
-        // Obtain our slot.
         let cursor = self.0.index.fetch_add(1, Ordering::Relaxed);
         let (top, bottom) = (cursor / GC_SWEEP_BLOCK_ENTRIES, cursor % GC_SWEEP_BLOCK_ENTRIES);
 
-        // Do we need to add a block?
         let mut spine_length = self.0.spine_length.load(Ordering::Relaxed);
         let block : SweepBlock = loop {
             if top < spine_length {
-                // 		spine := atomic.Loadp(unsafe.Pointer(&b.spine))
-                // 		blockp := add(spine, sys.PtrSize*top)
-                // 		block = (*gcSweepBlock)(atomic.Loadp(blockp))
+                break self.get_spine_block(top);
             } else {
-                // Add a new block to the spine, potentially growing
-                // the spine.
-                let mut spine_cap = *self.0.spine_cap.lock().expect("Could not unlock spine cap");
+                let spine_cap = self.0.spine_cap.lock().expect("Could not unlock spine cap");
                 // spine_length cannot change until we release the lock,
                 // but may have changed while we were waiting.
                 spine_length = self.0.spine_length.load(Ordering::Relaxed);
                 if top < spine_length {
                     continue
                 } else {
-                    if spine_length == spine_cap {
-                        // Grow the spine.
-                        let new_cap = if spine_cap != 0 {
-                            spine_cap * 2
-                        } else {
-                            GC_SWEEP_BUF_INIT_SPINE_CAP
-                        };
-
-                        let layout = Layout::array::<SweepBlock>(new_cap).expect("Could not layout spine");
-
-                        // TODO: Blocks are allocated off-heap, so no write barriers.
-                        // TODO: new_spine = persistent_alloc(new_cap*sys.PtrSize, sys.CacheLineSize,
-                        // &memstats.gc_sys)
-                        let mut new_spine = unsafe {
-                            let mut spine = mem::transmute::<*mut SweepBlock, *mut u8>(self.0.spine.load(Ordering::Relaxed));
-                            mem::transmute::<*mut u8, *mut SweepBlock>(
-                                if spine_cap == 0 {
-                                    alloc(layout)
-                                } else {
-                                    realloc(spine, layout, spine_cap)
-                                }
-                            )
-                        };
-
-                        // TODO: Spine is allocated off-heap, so no write barrier.
-                        self.0.spine.store(new_spine, Ordering::Relaxed);
-                        spine_cap = new_cap;
-                        // We can't immediately free the old spine
-                        // since a concurrent push with a lower index
-                        // could still be reading from it. We let it
-                        // leak because even a 1TB heap would waste
-                        // less than 2MB of memory on old spines. If
-                        // this is a problem, we could free old spines
-                        // during STW.
-                    }
-
-                    // Allocate a new block and add it to the spine.
-                    unsafe {
-                        let block = mem::transmute::<*mut u8, SweepBlock>(alloc(Layout::new::<SweepBlockData>()));
-                        let block_ptr = self.0.spine.load(Ordering::Relaxed).offset(top as isize);
-                        // Blocks are allocated off-heap, so no write barrier.
-                        let block_ptr_atomic : AtomicPtr<SweepBlockData> = mem::transmute(block_ptr);
-                        block_ptr_atomic.store(block, Ordering::Relaxed);
-                        self.0.spine_length.fetch_add(1, Ordering::Relaxed);
-                    };
+                    break self.allocate_block(spine_length, spine_cap, top);
                 }
             }
         };
-        // We have a block. Insert the span.
+
         block.spans[bottom] = span;
+    }
+
+    fn allocate_block(&self, spine_length: usize, mut spine_cap: MutexGuard<usize>, top: usize) -> SweepBlock {
+        if spine_length == *spine_cap {
+            *spine_cap = self.grow_spine(*spine_cap);
+        }
+
+        // Allocate a new block and add it to the spine.
+        unsafe {
+            let block = alloc(Layout::new::<SweepBlockData>());
+            let spine_block_ptr_ref = self.0.spine.load(Ordering::Relaxed).offset(top as isize);
+            let spine_block_ptr : AtomicPtr<u8> = mem::transmute(spine_block_ptr_ref);
+            // Blocks are allocated off-heap, so no write barrier.
+            spine_block_ptr.store(block, Ordering::Relaxed);
+            self.0.spine_length.fetch_add(1, Ordering::Relaxed);
+            mem::transmute(block)
+        }
+    }
+
+    fn get_spine_block(&self, top: usize) -> SweepBlock {
+        unsafe {
+            let spine_block_ptr_ref = self.0.spine.load(Ordering::Relaxed).offset(top as isize);
+            let spine_block_ptr : AtomicPtr<u8> = mem::transmute(spine_block_ptr_ref);
+            let block = spine_block_ptr.load(Ordering::Relaxed);
+            mem::transmute(block)
+        }
+    }
+
+    fn grow_spine(&self, spine_cap: usize) -> usize {
+        let new_cap = match spine_cap {
+            0 => GC_SWEEP_BUF_INIT_SPINE_CAP,
+            _ => spine_cap * 2
+        };
+
+        // TODO: Blocks are allocated off-heap, so no write barriers.
+        // TODO: Go uses persistentAlloc here for super fast allocation
+        let layout = Layout::array::<SweepBlock>(new_cap).expect("Could not layout spine");
+        let spine = self.0.spine.load(Ordering::Relaxed) as *mut u8;
+        let new_spine = unsafe {
+            mem::transmute(
+                if spine_cap == 0 {
+                    alloc(layout)
+                } else {
+                    realloc(spine, layout, new_cap)
+                }
+            )
+        };
+
+        // TODO: Spine is allocated off-heap, so no write barrier.
+        self.0.spine.store(new_spine, Ordering::Relaxed);
+        new_cap
+        // Note about leaking spine blocks:
+        // We can't immediately free the old spine
+        // since a concurrent push with a lower index
+        // could still be reading from it. We let it
+        // leak because even a 1TB heap would waste
+        // less than 2MB of memory on old spines. If
+        // this is a problem, we could free old spines
+        // during STW.
     }
 }
