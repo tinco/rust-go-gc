@@ -79,7 +79,7 @@ pub struct MemoryHeap {
     // // the slope, it would create a discontinuity in debt if any
     // // progress has already been made.
     // pagesInUse         uint64  // pages of spans in stats _MSpanInUse; R/W with mheap.lock
-    // pagesSwept         uint64  // pages swept this cycle; updated atomically
+    pub pages_swept: AtomicUsize, // pages swept this cycle; updated atomically
     // pagesSweptBasis    uint64  // pagesSwept to use as the origin of the sweep ratio; updated atomically
     // sweepHeapLiveBasis uint64  // value of heap_live to use as the origin of sweep ratio; written with lock, read without
     // sweepPagesPerByte  float64 // proportional sweep ratio; written with lock, read without
@@ -166,5 +166,6 @@ pub fn new_memory_heap() -> MemoryHeap {
         sweepers: AtomicUsize::new(0),
         sweep_generation: AtomicUsize::new(0),
         sweep_buffers: [SweepBuffer::new(), SweepBuffer::new()],
+        pages_swept: AtomicUsize::new(0),
     }
 }

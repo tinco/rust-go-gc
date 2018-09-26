@@ -1,5 +1,7 @@
 use std::ptr::Unique;
-use std::sync::atomic::{AtomicUsize};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use super::memory_heap::*;
+use super::size_classes::*;
 
 pub struct MemorySpanData {
     // next *mspan     // next span in list, or nil if none
@@ -29,7 +31,7 @@ pub struct MemorySpanData {
     // freeindex uintptr
     // // TODO: Look up nelems from sizeclass and remove this field if it
     // // helps performance.
-    // nelems uintptr // number of object in the span.
+    pub number_of_elements: usize, // number of object in the span.
     //
     // // Cache of the allocBits at freeindex. allocCache is shifted
     // // such that the lowest bit corresponds to the bit freeindex.
@@ -39,31 +41,32 @@ pub struct MemorySpanData {
     // // these.
     // allocCache uint64
     //
-    // // allocBits and gcmarkBits hold pointers to a span's mark and
-    // // allocation bits. The pointers are 8 byte aligned.
-    // // There are three arenas where this data is held.
-    // // free: Dirty arenas that are no longer accessed
-    // //       and can be reused.
-    // // next: Holds information to be used in the next GC cycle.
-    // // current: Information being used during this GC cycle.
-    // // previous: Information being used during the last GC cycle.
-    // // A new GC cycle starts with the call to finishsweep_m.
-    // // finishsweep_m moves the previous arena to the free arena,
-    // // the current arena to the previous arena, and
-    // // the next arena to the current arena.
-    // // The next arena is populated as the spans request
-    // // memory to hold gcmarkBits for the next GC cycle as well
-    // // as allocBits for newly allocated spans.
-    // //
+    // allocBits and gcmarkBits hold pointers to a span's mark and
+    // allocation bits. The pointers are 8 byte aligned.
+    // There are three arenas where this data is held.
+    // free: Dirty arenas that are no longer accessed
+    //       and can be reused.
+    // next: Holds information to be used in the next GC cycle.
+    // current: Information being used during this GC cycle.
+    // previous: Information being used during the last GC cycle.
+    // A new GC cycle starts with the call to finishsweep_m.
+    // finishsweep_m moves the previous arena to the free arena,
+    // the current arena to the previous arena, and
+    // the next arena to the current arena.
+    // The next arena is populated as the spans request
+    // memory to hold gcmarkBits for the next GC cycle as well
+    // as allocBits for newly allocated spans.
+
     // The pointer arithmetic is done "by hand" instead of using
     // arrays to avoid bounds checks along critical performance
     // paths. (TODO: NOT IN RUST: slice.get_unchecked())
-    // // The sweep will free the old allocBits and set allocBits to the
-    // // gcmarkBits. The gcmarkBits are replaced with a fresh zeroed
-    // // out memory.
+
+    // The sweep will free the old allocBits and set allocBits to the
+    // gcmarkBits. The gcmarkBits are replaced with a fresh zeroed
+    // out memory.
     // allocBits  *gcBits
-    // gcmarkBits *gcBits
-    //
+    pub gc_mark_bits: Unique<u8>,
+
     // // sweep generation:
     // // if sweepgen == h->sweepgen - 2, the span needs sweeping
     // // if sweepgen == h->sweepgen - 1, the span is currently being swept
@@ -74,13 +77,13 @@ pub struct MemorySpanData {
     // divMul      uint16     // for divide by elemsize - divMagic.mul
     // baseMask    uint16     // if non-0, elemsize is a power of 2, & this will get object allocation base
     // allocCount  uint16     // number of allocated objects
-    // spanclass   spanClass  // size class and noscan (uint8)
+    pub span_class: SpanClass,  // size class and noscan (uint8)
     // incache     bool       // being used by an mcache
-    pub state:       State, // mspaninuse etc
+    pub state: State, // mspaninuse etc
     // needzero    uint8      // needs to be zeroed before allocation
     // divShift    uint8      // for divide by elemsize - divMagic.shift
     // divShift2   uint8      // for divide by elemsize - divMagic.shift2
-    // elemsize    uintptr    // computed from sizeclass or from npages
+    pub element_size: usize,  // computed from sizeclass or from npages
     // unusedsince int64      // first time spotted by gc in mspanfree state
     // npreleased  uintptr    // number of pages released to the os
     // limit       uintptr    // end of data in span
@@ -112,6 +115,55 @@ pub enum State {
     Free
 }
 
+// A spanClass represents the size class and noscan-ness of a span.
+//
+// Each size class has a noscan spanClass and a scan spanClass. The
+// noscan spanClass contains only noscan objects, which do not contain
+// pointers and thus do not need to be scanned by the garbage
+// collector.
+#[derive(Clone, Copy)]
+pub struct SpanClass(pub u8);
+
+const NUM_SPAN_CLASSES : SpanClass = SpanClass(NUM_SIZE_CLASSES << 1);
+const TINY_SPAN_CLASS : SpanClass = SpanClass(TINY_SIZE_CLASS<<1 | 1);
+
+// oneBitCount is indexed by byte and produces the
+// number of 1 bits in that byte. For example 128 has 1 bit set
+// and oneBitCount[128] will holds 1.
+const ONE_BIT_COUNT : [u8;256] = [
+    0, 1, 1, 2, 1, 2, 2, 3,
+    1, 2, 2, 3, 2, 3, 3, 4,
+    1, 2, 2, 3, 2, 3, 3, 4,
+    2, 3, 3, 4, 3, 4, 4, 5,
+    1, 2, 2, 3, 2, 3, 3, 4,
+    2, 3, 3, 4, 3, 4, 4, 5,
+    2, 3, 3, 4, 3, 4, 4, 5,
+    3, 4, 4, 5, 4, 5, 5, 6,
+    1, 2, 2, 3, 2, 3, 3, 4,
+    2, 3, 3, 4, 3, 4, 4, 5,
+    2, 3, 3, 4, 3, 4, 4, 5,
+    3, 4, 4, 5, 4, 5, 5, 6,
+    2, 3, 3, 4, 3, 4, 4, 5,
+    3, 4, 4, 5, 4, 5, 5, 6,
+    3, 4, 4, 5, 4, 5, 5, 6,
+    4, 5, 5, 6, 5, 6, 6, 7,
+    1, 2, 2, 3, 2, 3, 3, 4,
+    2, 3, 3, 4, 3, 4, 4, 5,
+    2, 3, 3, 4, 3, 4, 4, 5,
+    3, 4, 4, 5, 4, 5, 5, 6,
+    2, 3, 3, 4, 3, 4, 4, 5,
+    3, 4, 4, 5, 4, 5, 5, 6,
+    3, 4, 4, 5, 4, 5, 5, 6,
+    4, 5, 5, 6, 5, 6, 6, 7,
+    2, 3, 3, 4, 3, 4, 4, 5,
+    3, 4, 4, 5, 4, 5, 5, 6,
+    3, 4, 4, 5, 4, 5, 5, 6,
+    4, 5, 5, 6, 5, 6, 6, 7,
+    3, 4, 4, 5, 4, 5, 5, 6,
+    4, 5, 5, 6, 5, 6, 6, 7,
+    4, 5, 5, 6, 5, 6, 6, 7,
+    5, 6, 6, 7, 6, 7, 7, 8];
+
 impl MemorySpanData {
     // Sweep frees or collects finalizers for blocks not marked in the mark phase.
     // It clears the mark bits in preparation for the next GC round.
@@ -119,118 +171,46 @@ impl MemorySpanData {
     // If preserve=true, don't return it to heap nor relink in MCentral lists;
     // caller takes care of it.
     //TODO go:nowritebarrier
-    pub fn sweep(&mut self, preserve: bool) -> bool {
+    pub fn sweep(&mut self, memory_heap: &MemoryHeap, reserve: bool) -> bool {
         // It's critical that we enter this function with preemption disabled,
         // GC must not start while we are in the middle of this function.
-        // _g_ := getg()
-        // if _g_.m.locks == 0 && _g_.m.mallocing == 0 && _g_ != _g_.m.g0 {
-        // 	throw("MSpan_Sweep: m is not locked")
-        // }
-        // sweepgen := mheap_.sweepgen
-        // if s.state != mSpanInUse || s.sweepgen != sweepgen-1 {
-        // 	print("MSpan_Sweep: state=", s.state, " sweepgen=", s.sweepgen, " mheap.sweepgen=", sweepgen, "\n")
-        // 	throw("MSpan_Sweep: bad span state")
-        // }
-        //
+        // Since we're not preempting any Rust code, we don't have to worry about that.
+
+        let sweep_generation = memory_heap.sweep_generation.load(Ordering::Relaxed);
+        let span_sweep_generation = self.sweep_generation.load(Ordering::Relaxed);
+
+        if self.state != State::InUse || span_sweep_generation != sweep_generation - 1 {
+        	//print("MSpan_Sweep: state=", s.state, " sweepgen=", s.sweepgen, " mheap.sweepgen=", sweepgen, "\n")
+        	panic!("MemorySpan#sweep: bad span state");
+        }
+
         // if trace.enabled {
         // 	traceGCSweepSpan(s.npages * _PageSize)
         // }
-        //
-        // atomic.Xadd64(&mheap_.pagesSwept, int64(s.npages))
-        //
-        // spc := s.spanclass
-        // size := s.elemsize
-        // res := false
-        //
+
+        memory_heap.pages_swept.fetch_add(self.number_of_pages, Ordering::Relaxed);
+
+        let span_class = self.span_class;
+        let element_size = self.element_size;
+        let result = false;
+
+        // Unlink & free special records for any objects we're about to free.
+        self.free_specials();
+        self.maybe_trace_free();
+
+        // The allocBits indicate which unmarked objects don't need to be
+        // processed since they were free at the end of the last GC cycle
+        // and were not allocated since then.
+        // If the allocBits index is >= s.freeindex and the bit
+        // is not marked then the object remains unallocated
+        // since the last GC.
+        // This situation is analogous to being on a freelist.
+
         // c := _g_.m.mcache
-        // freeToHeap := false
-        //
-        // // The allocBits indicate which unmarked objects don't need to be
-        // // processed since they were free at the end of the last GC cycle
-        // // and were not allocated since then.
-        // // If the allocBits index is >= s.freeindex and the bit
-        // // is not marked then the object remains unallocated
-        // // since the last GC.
-        // // This situation is analogous to being on a freelist.
-        //
-        // // Unlink & free special records for any objects we're about to free.
-        // // Two complications here:
-        // // 1. An object can have both finalizer and profile special records.
-        // //    In such case we need to queue finalizer for execution,
-        // //    mark the object as live and preserve the profile special.
-        // // 2. A tiny object can have several finalizers setup for different offsets.
-        // //    If such object is not marked, we need to queue all finalizers at once.
-        // // Both 1 and 2 are possible at the same time.
-        // specialp := &s.specials
-        // special := *specialp
-        // for special != nil {
-        // 	// A finalizer can be set for an inner byte of an object, find object beginning.
-        // 	objIndex := uintptr(special.offset) / size
-        // 	p := s.base() + objIndex*size
-        // 	mbits := s.markBitsForIndex(objIndex)
-        // 	if !mbits.isMarked() {
-        // 		// This object is not marked and has at least one special record.
-        // 		// Pass 1: see if it has at least one finalizer.
-        // 		hasFin := false
-        // 		endOffset := p - s.base() + size
-        // 		for tmp := special; tmp != nil && uintptr(tmp.offset) < endOffset; tmp = tmp.next {
-        // 			if tmp.kind == _KindSpecialFinalizer {
-        // 				// Stop freeing of object if it has a finalizer.
-        // 				mbits.setMarkedNonAtomic()
-        // 				hasFin = true
-        // 				break
-        // 			}
-        // 		}
-        // 		// Pass 2: queue all finalizers _or_ handle profile record.
-        // 		for special != nil && uintptr(special.offset) < endOffset {
-        // 			// Find the exact byte for which the special was setup
-        // 			// (as opposed to object beginning).
-        // 			p := s.base() + uintptr(special.offset)
-        // 			if special.kind == _KindSpecialFinalizer || !hasFin {
-        // 				// Splice out special record.
-        // 				y := special
-        // 				special = special.next
-        // 				*specialp = special
-        // 				freespecial(y, unsafe.Pointer(p), size)
-        // 			} else {
-        // 				// This is profile record, but the object has finalizers (so kept alive).
-        // 				// Keep special record.
-        // 				specialp = &special.next
-        // 				special = *specialp
-        // 			}
-        // 		}
-        // 	} else {
-        // 		// object is still live: keep special record
-        // 		specialp = &special.next
-        // 		special = *specialp
-        // 	}
-        // }
-        //
-        // if debug.allocfreetrace != 0 || raceenabled || msanenabled {
-        // 	// Find all newly freed objects. This doesn't have to
-        // 	// efficient; allocfreetrace has massive overhead.
-        // 	mbits := s.markBitsForBase()
-        // 	abits := s.allocBitsForIndex(0)
-        // 	for i := uintptr(0); i < s.nelems; i++ {
-        // 		if !mbits.isMarked() && (abits.index < s.freeindex || abits.isMarked()) {
-        // 			x := s.base() + i*s.elemsize
-        // 			if debug.allocfreetrace != 0 {
-        // 				tracefree(unsafe.Pointer(x), size)
-        // 			}
-        // 			if raceenabled {
-        // 				racefree(unsafe.Pointer(x), size)
-        // 			}
-        // 			if msanenabled {
-        // 				msanfree(unsafe.Pointer(x), size)
-        // 			}
-        // 		}
-        // 		mbits.advance()
-        // 		abits.advance()
-        // 	}
-        // }
-        //
-        // // Count the number of free objects in this span.
-        // nalloc := uint16(s.countAlloc())
+        let mut free_to_heap = false;
+
+        // Count the number of free objects in this span.
+        let number_of_allocations = self.count_allocations() as u16;
         // if spc.sizeclass() == 0 && nalloc == 0 {
         // 	s.needzero = 1
         // 	freeToHeap = true
@@ -312,6 +292,107 @@ impl MemorySpanData {
         // }
         // return res
         false
+    }
+
+    // Unlink & free special records for any objects we're about to free.
+    // Two complications here:
+    // 1. An object can have both finalizer and profile special records.
+    //    In such case we need to queue finalizer for execution,
+    //    mark the object as live and preserve the profile special.
+    // 2. A tiny object can have several finalizers setup for different offsets.
+    //    If such object is not marked, we need to queue all finalizers at once.
+    // Both 1 and 2 are possible at the same time.
+    fn free_specials(&mut self) {
+        // specialp := &s.specials
+        // special := *specialp
+
+        // for special != nil {
+        // 	// A finalizer can be set for an inner byte of an object, find object beginning.
+        // 	objIndex := uintptr(special.offset) / size
+        // 	p := s.base() + objIndex*size
+        // 	mbits := s.markBitsForIndex(objIndex)
+        // 	if !mbits.isMarked() {
+        // 		// This object is not marked and has at least one special record.
+        // 		// Pass 1: see if it has at least one finalizer.
+        // 		hasFin := false
+        // 		endOffset := p - s.base() + size
+        // 		for tmp := special; tmp != nil && uintptr(tmp.offset) < endOffset; tmp = tmp.next {
+        // 			if tmp.kind == _KindSpecialFinalizer {
+        // 				// Stop freeing of object if it has a finalizer.
+        // 				mbits.setMarkedNonAtomic()
+        // 				hasFin = true
+        // 				break
+        // 			}
+        // 		}
+        // 		// Pass 2: queue all finalizers _or_ handle profile record.
+        // 		for special != nil && uintptr(special.offset) < endOffset {
+        // 			// Find the exact byte for which the special was setup
+        // 			// (as opposed to object beginning).
+        // 			p := s.base() + uintptr(special.offset)
+        // 			if special.kind == _KindSpecialFinalizer || !hasFin {
+        // 				// Splice out special record.
+        // 				y := special
+        // 				special = special.next
+        // 				*specialp = special
+        // 				freespecial(y, unsafe.Pointer(p), size)
+        // 			} else {
+        // 				// This is profile record, but the object has finalizers (so kept alive).
+        // 				// Keep special record.
+        // 				specialp = &special.next
+        // 				special = *specialp
+        // 			}
+        // 		}
+        // 	} else {
+        // 		// object is still live: keep special record
+        // 		specialp = &special.next
+        // 		special = *specialp
+        // 	}
+        // }
+    }
+
+    fn maybe_trace_free(&mut self) {
+        // if debug.allocfreetrace != 0 || raceenabled || msanenabled {
+        // 	// Find all newly freed objects. This doesn't have to
+        // 	// efficient; allocfreetrace has massive overhead.
+        // 	mbits := s.markBitsForBase()
+        // 	abits := s.allocBitsForIndex(0)
+        // 	for i := uintptr(0); i < s.nelems; i++ {
+        // 		if !mbits.isMarked() && (abits.index < s.freeindex || abits.isMarked()) {
+        // 			x := s.base() + i*s.elemsize
+        // 			if debug.allocfreetrace != 0 {
+        // 				tracefree(unsafe.Pointer(x), size)
+        // 			}
+        // 			if raceenabled {
+        // 				racefree(unsafe.Pointer(x), size)
+        // 			}
+        // 			if msanenabled {
+        // 				msanfree(unsafe.Pointer(x), size)
+        // 			}
+        // 		}
+        // 		mbits.advance()
+        // 		abits.advance()
+        // 	}
+        // }
+    }
+
+    // countAlloc returns the number of objects allocated in span s by
+    // scanning the allocation bitmap.
+    // TODO:(rlh) Use popcount intrinsic.
+    fn count_allocations(&mut self) -> usize {
+        let mut count : usize = 0;
+        let max_index = (self.number_of_elements / 8) as isize;
+        for i in 0..max_index {
+            let mark_bits = unsafe { *self.gc_mark_bits.as_ptr().offset(i) } as usize;
+            count += ONE_BIT_COUNT[mark_bits] as usize;
+        }
+        let bits_in_last_byte = self.number_of_elements % 8;
+        if bits_in_last_byte != 0 {
+            let mark_bits = unsafe { *self.gc_mark_bits.as_ptr().offset(max_index) };
+            let mask = (1 << bits_in_last_byte) - 1;
+            let bits = mark_bits & mask;
+            count += ONE_BIT_COUNT[bits as usize] as usize;
+        }
+        count
     }
 
 }

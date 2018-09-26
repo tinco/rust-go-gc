@@ -12,9 +12,10 @@
 #![feature(allocator_api)]
 #![feature(ptr_internals)]
 
-mod memory_span;
-mod sweep_buffer;
-mod memory_heap;
+pub mod memory_span;
+pub mod sweep_buffer;
+pub mod memory_heap;
+pub mod size_classes;
 
 use futures::sync::{oneshot, mpsc};
 use futures::stream::Stream;
@@ -200,7 +201,7 @@ impl GC {
                             continue
                         }
                         number_of_pages = span.number_of_pages;
-                        if !span.sweep(false) {
+                        if !span.sweep(&self.memory_heap, false) {
                             // Span is still in-use, so this returned no
                             // pages to the heap and the span needs to
                             // move to the swept in-use list.
