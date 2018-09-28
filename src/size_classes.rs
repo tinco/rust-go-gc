@@ -69,15 +69,14 @@
 //    65      28672       57344        2            0
 //    66      32768       32768        1            0
 
-pub const MAX_SMALL_SIZE : usize = 32768;
-pub const SMALL_SIZE_DIV : usize = 8;
-pub const SMALL_SIZE_MAX : usize = 1024;
-pub const LARGE_SIZE_DIV : usize = 128;
-pub const PAGE_SHIFT : usize = 13;
+pub const MAX_SMALL_SIZE: usize = 32768;
+pub const SMALL_SIZE_DIV: usize = 8;
+pub const SMALL_SIZE_MAX: usize = 1024;
+pub const LARGE_SIZE_DIV: usize = 128;
+pub const PAGE_SHIFT: usize = 13;
 
-pub const NUM_SIZE_CLASSES : u8 = 67;
-pub const TINY_SIZE_CLASS : u8 = 2;
-
+pub const NUM_SIZE_CLASSES: u8 = 67;
+pub const TINY_SIZE_CLASS: u8 = 2;
 
 // var class_to_size = [_NumSizeClasses]uint16{0, 8, 16, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256, 288, 320, 352, 384, 416, 448, 480, 512, 576, 640, 704, 768, 896, 1024, 1152, 1280, 1408, 1536, 1792, 2048, 2304, 2688, 3072, 3200, 3456, 4096, 4864, 5376, 6144, 6528, 6784, 6912, 8192, 9472, 9728, 10240, 10880, 12288, 13568, 14336, 16384, 18432, 19072, 20480, 21760, 24576, 27264, 28672, 32768}
 // var class_to_allocnpages = [_NumSizeClasses]uint8{0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 2, 1, 2, 1, 3, 2, 3, 1, 3, 2, 3, 4, 5, 6, 1, 7, 6, 5, 4, 3, 5, 7, 2, 9, 7, 5, 8, 3, 10, 7, 4}

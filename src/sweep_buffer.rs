@@ -1,10 +1,9 @@
-
 use super::memory_span::*;
-use std::sync::atomic::{AtomicUsize, AtomicPtr, Ordering};
-use std::sync::{Mutex, MutexGuard};
 use std::alloc::*;
 use std::mem;
 use std::ptr::Unique;
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use std::sync::{Mutex, MutexGuard};
 
 const GC_SWEEP_BLOCK_ENTRIES: usize = 512; // 4KB on 64-bit
 const GC_SWEEP_BUF_INIT_SPINE_CAP: usize = 256; // Enough for 1GB heap on 64-bit
@@ -33,12 +32,12 @@ pub struct SweepBuffer {
     // // of all blocks. It is accessed atomically.
     pub index: AtomicUsize,
     pub spine_length: AtomicUsize, // Spine array length, accessed atomically
-    pub spine_cap: Mutex<usize>, // Spine array cap, accessed under lock
+    pub spine_cap: Mutex<usize>,   // Spine array cap, accessed under lock
     pub spine: AtomicPtr<SweepBlock>, // Spine is a pointer to an array of atomic pointers to SweepBlockData
 }
 
 pub struct SweepBlockData {
-    spans: [Option<MemorySpan>; GC_SWEEP_BLOCK_ENTRIES]
+    spans: [Option<MemorySpan>; GC_SWEEP_BLOCK_ENTRIES],
 }
 
 pub type SweepBlock = Unique<SweepBlockData>;
@@ -57,7 +56,7 @@ impl SweepBuffer {
     fn get_spine_block(&self, top: usize) -> SweepBlock {
         unsafe {
             let spine_block_ptr_ref = self.spine.load(Ordering::Relaxed).offset(top as isize);
-            let spine_block_ptr : AtomicPtr<u8> = mem::transmute(spine_block_ptr_ref);
+            let spine_block_ptr: AtomicPtr<u8> = mem::transmute(spine_block_ptr_ref);
             let block = spine_block_ptr.load(Ordering::Relaxed);
             Unique::new(mem::transmute(block)).expect("SweepBuffer had null pointer block")
         }
@@ -78,10 +77,13 @@ impl PopableSweepBuffer {
             None
         } else {
             let cursor = cursor - 1; // fetch_sub returns old cursor
-            // There are no concurrent spine or block modifications during
-            // pop, so we can omit the atomics.
-            // TODO Unfortunately it's unstable to read atomics unatomically in Rust do this later?
-            let (top, bottom) = (cursor / GC_SWEEP_BLOCK_ENTRIES, cursor % GC_SWEEP_BLOCK_ENTRIES);
+                                     // There are no concurrent spine or block modifications during
+                                     // pop, so we can omit the atomics.
+                                     // TODO Unfortunately it's unstable to read atomics unatomically in Rust do this later?
+            let (top, bottom) = (
+                cursor / GC_SWEEP_BLOCK_ENTRIES,
+                cursor % GC_SWEEP_BLOCK_ENTRIES,
+            );
             let mut block = self.0.get_spine_block(top);
             let mut_block = unsafe { block.as_mut() };
             let span = mut_block.spans[bottom];
@@ -97,10 +99,13 @@ impl PushableSweepBuffer {
     // with other push operations, but NOT to call concurrently with pop.
     pub fn push(&self, span: MemorySpan) {
         let cursor = self.0.index.fetch_add(1, Ordering::Relaxed);
-        let (top, bottom) = (cursor / GC_SWEEP_BLOCK_ENTRIES, cursor % GC_SWEEP_BLOCK_ENTRIES);
+        let (top, bottom) = (
+            cursor / GC_SWEEP_BLOCK_ENTRIES,
+            cursor % GC_SWEEP_BLOCK_ENTRIES,
+        );
 
         let mut spine_length = self.0.spine_length.load(Ordering::Relaxed);
-        let mut block : SweepBlock = loop {
+        let mut block: SweepBlock = loop {
             if top < spine_length {
                 break self.0.get_spine_block(top);
             } else {
@@ -109,7 +114,7 @@ impl PushableSweepBuffer {
                 // but may have changed while we were waiting.
                 spine_length = self.0.spine_length.load(Ordering::Relaxed);
                 if top < spine_length {
-                    continue
+                    continue;
                 } else {
                     break self.allocate_block(spine_length, spine_cap, top);
                 }
@@ -119,7 +124,12 @@ impl PushableSweepBuffer {
         unsafe { block.as_mut() }.spans[bottom] = Some(span);
     }
 
-    fn allocate_block(&self, spine_length: usize, mut spine_cap: MutexGuard<usize>, top: usize) -> SweepBlock {
+    fn allocate_block(
+        &self,
+        spine_length: usize,
+        mut spine_cap: MutexGuard<usize>,
+        top: usize,
+    ) -> SweepBlock {
         if spine_length == *spine_cap {
             *spine_cap = self.grow_spine(*spine_cap);
         }
@@ -128,7 +138,7 @@ impl PushableSweepBuffer {
         unsafe {
             let block = alloc(Layout::new::<SweepBlockData>());
             let spine_block_ptr_ref = self.0.spine.load(Ordering::Relaxed).offset(top as isize);
-            let spine_block_ptr : AtomicPtr<u8> = mem::transmute(spine_block_ptr_ref);
+            let spine_block_ptr: AtomicPtr<u8> = mem::transmute(spine_block_ptr_ref);
             // Blocks are allocated off-heap, so no write barrier.
             spine_block_ptr.store(block, Ordering::Relaxed);
             self.0.spine_length.fetch_add(1, Ordering::Relaxed);
@@ -139,7 +149,7 @@ impl PushableSweepBuffer {
     fn grow_spine(&self, spine_cap: usize) -> usize {
         let new_cap = match spine_cap {
             0 => GC_SWEEP_BUF_INIT_SPINE_CAP,
-            _ => spine_cap * 2
+            _ => spine_cap * 2,
         };
 
         // TODO: Blocks are allocated off-heap, so no write barriers.
@@ -147,13 +157,11 @@ impl PushableSweepBuffer {
         let layout = Layout::array::<SweepBlock>(new_cap).expect("Could not layout spine");
         let spine = self.0.spine.load(Ordering::Relaxed) as *mut u8;
         let new_spine = unsafe {
-            mem::transmute(
-                if spine_cap == 0 {
-                    alloc(layout)
-                } else {
-                    realloc(spine, layout, new_cap)
-                }
-            )
+            mem::transmute(if spine_cap == 0 {
+                alloc(layout)
+            } else {
+                realloc(spine, layout, new_cap)
+            })
         };
 
         // TODO: Spine is allocated off-heap, so no write barrier.

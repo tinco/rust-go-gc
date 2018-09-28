@@ -1,7 +1,7 @@
-use std::ptr::Unique;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use super::memory_heap::*;
 use super::size_classes::*;
+use std::ptr::Unique;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub struct MemorySpanData {
     // next *mspan     // next span in list, or nil if none
@@ -9,37 +9,37 @@ pub struct MemorySpanData {
     // list *mSpanList // For debugging. TODO: Remove.
     //
     // startAddr uintptr // address of first byte of span aka s.base()
-    pub number_of_pages:    usize, // number of pages in span
+    pub number_of_pages: usize, // number of pages in span
     //
     // manualFreeList gclinkptr // list of free objects in _MSpanManual spans
     //
-    // // freeindex is the slot index between 0 and nelems at which to begin scanning
-    // // for the next free object in this span.
-    // // Each allocation scans allocBits starting at freeindex until it encounters a 0
-    // // indicating a free object. freeindex is then adjusted so that subsequent scans begin
-    // // just past the newly discovered free object.
-    // //
-    // // If freeindex == nelem, this span has no free objects.
-    // //
-    // // allocBits is a bitmap of objects in this span.
-    // // If n >= freeindex and allocBits[n/8] & (1<<(n%8)) is 0
-    // // then object n is free;
-    // // otherwise, object n is allocated. Bits starting at nelem are
-    // // undefined and should never be referenced.
-    // //
-    // // Object n starts at address n*elemsize + (start << pageShift).
-    // freeindex uintptr
+    // freeindex is the slot index between 0 and nelems at which to begin scanning
+    // for the next free object in this span.
+    // Each allocation scans allocBits starting at freeindex until it encounters a 0
+    // indicating a free object. freeindex is then adjusted so that subsequent scans begin
+    // just past the newly discovered free object.
+    //
+    // If freeindex == nelem, this span has no free objects.
+    //
+    // allocBits is a bitmap of objects in this span.
+    // If n >= freeindex and allocBits[n/8] & (1<<(n%8)) is 0
+    // then object n is free;
+    // otherwise, object n is allocated. Bits starting at nelem are
+    // undefined and should never be referenced.
+    //
+    // Object n starts at address n*elemsize + (start << pageShift).
+    pub free_index: usize,
     // // TODO: Look up nelems from sizeclass and remove this field if it
     // // helps performance.
     pub number_of_elements: usize, // number of object in the span.
     //
-    // // Cache of the allocBits at freeindex. allocCache is shifted
-    // // such that the lowest bit corresponds to the bit freeindex.
-    // // allocCache holds the complement of allocBits, thus allowing
-    // // ctz (count trailing zero) to use it directly.
-    // // allocCache may contain bits beyond s.nelems; the caller must ignore
-    // // these.
-    // allocCache uint64
+    // Cache of the allocBits at freeindex. allocCache is shifted
+    // such that the lowest bit corresponds to the bit freeindex.
+    // allocCache holds the complement of allocBits, thus allowing
+    // ctz (count trailing zero) to use it directly.
+    // allocCache may contain bits beyond s.nelems; the caller must ignore
+    // these.
+    pub alloc_cache: u64,
     //
     // allocBits and gcmarkBits hold pointers to a span's mark and
     // allocation bits. The pointers are 8 byte aligned.
@@ -73,22 +73,22 @@ pub struct MemorySpanData {
     // // if sweepgen == h->sweepgen, the span is swept and ready to use
     // // h->sweepgen is incremented by 2 after every GC
     //
-    pub sweep_generation:  AtomicUsize, //TODO u32
+    pub sweep_generation: AtomicUsize, //TODO u32
     // divMul      uint16     // for divide by elemsize - divMagic.mul
     // baseMask    uint16     // if non-0, elemsize is a power of 2, & this will get object allocation base
-    // allocCount  uint16     // number of allocated objects
+    pub allocations_count: u16, // number of allocated objects
     pub span_class: SpanClass,  // size class and noscan (uint8)
     // incache     bool       // being used by an mcache
-    pub state: State, // mspaninuse etc
-    // needzero    uint8      // needs to be zeroed before allocation
+    pub state: State,  // mspaninuse etc
+    pub need_zero: u8, // needs to be zeroed before allocation
     // divShift    uint8      // for divide by elemsize - divMagic.shift
     // divShift2   uint8      // for divide by elemsize - divMagic.shift2
-    pub element_size: usize,  // computed from sizeclass or from npages
-    // unusedsince int64      // first time spotted by gc in mspanfree state
-    // npreleased  uintptr    // number of pages released to the os
-    // limit       uintptr    // end of data in span
-    // speciallock mutex      // guards specials list
-    // specials    *special   // linked list of special records sorted by offset.
+    pub element_size: usize, // computed from sizeclass or from npages
+                             // unusedsince int64      // first time spotted by gc in mspanfree state
+                             // npreleased  uintptr    // number of pages released to the os
+                             // limit       uintptr    // end of data in span
+                             // speciallock mutex      // guards specials list
+                             // specials    *special   // linked list of special records sorted by offset.
 }
 
 pub type MemorySpan = Unique<MemorySpanData>;
@@ -110,9 +110,9 @@ pub type MemorySpan = Unique<MemorySpanData>;
 #[derive(Debug, PartialEq, Eq)]
 pub enum State {
     Dead,
-    InUse,   // allocated for garbage collected heap
-    Manual,  // allocated for manual management (e.g., stack allocator)
-    Free
+    InUse,  // allocated for garbage collected heap
+    Manual, // allocated for manual management (e.g., stack allocator)
+    Free,
 }
 
 // A spanClass represents the size class and noscan-ness of a span.
@@ -124,45 +124,32 @@ pub enum State {
 #[derive(Clone, Copy)]
 pub struct SpanClass(pub u8);
 
-const NUM_SPAN_CLASSES : SpanClass = SpanClass(NUM_SIZE_CLASSES << 1);
-const TINY_SPAN_CLASS : SpanClass = SpanClass(TINY_SIZE_CLASS<<1 | 1);
+impl SpanClass {
+    pub fn size_class(self) -> i8 {
+        (self.0 >> 1) as i8
+    }
+
+    pub fn no_scan(self) -> bool {
+        (self.0 & 1) != 0
+    }
+}
+
+const NUM_SPAN_CLASSES: SpanClass = SpanClass(NUM_SIZE_CLASSES << 1);
+const TINY_SPAN_CLASS: SpanClass = SpanClass(TINY_SIZE_CLASS << 1 | 1);
 
 // oneBitCount is indexed by byte and produces the
 // number of 1 bits in that byte. For example 128 has 1 bit set
 // and oneBitCount[128] will holds 1.
-const ONE_BIT_COUNT : [u8;256] = [
-    0, 1, 1, 2, 1, 2, 2, 3,
-    1, 2, 2, 3, 2, 3, 3, 4,
-    1, 2, 2, 3, 2, 3, 3, 4,
-    2, 3, 3, 4, 3, 4, 4, 5,
-    1, 2, 2, 3, 2, 3, 3, 4,
-    2, 3, 3, 4, 3, 4, 4, 5,
-    2, 3, 3, 4, 3, 4, 4, 5,
-    3, 4, 4, 5, 4, 5, 5, 6,
-    1, 2, 2, 3, 2, 3, 3, 4,
-    2, 3, 3, 4, 3, 4, 4, 5,
-    2, 3, 3, 4, 3, 4, 4, 5,
-    3, 4, 4, 5, 4, 5, 5, 6,
-    2, 3, 3, 4, 3, 4, 4, 5,
-    3, 4, 4, 5, 4, 5, 5, 6,
-    3, 4, 4, 5, 4, 5, 5, 6,
-    4, 5, 5, 6, 5, 6, 6, 7,
-    1, 2, 2, 3, 2, 3, 3, 4,
-    2, 3, 3, 4, 3, 4, 4, 5,
-    2, 3, 3, 4, 3, 4, 4, 5,
-    3, 4, 4, 5, 4, 5, 5, 6,
-    2, 3, 3, 4, 3, 4, 4, 5,
-    3, 4, 4, 5, 4, 5, 5, 6,
-    3, 4, 4, 5, 4, 5, 5, 6,
-    4, 5, 5, 6, 5, 6, 6, 7,
-    2, 3, 3, 4, 3, 4, 4, 5,
-    3, 4, 4, 5, 4, 5, 5, 6,
-    3, 4, 4, 5, 4, 5, 5, 6,
-    4, 5, 5, 6, 5, 6, 6, 7,
-    3, 4, 4, 5, 4, 5, 5, 6,
-    4, 5, 5, 6, 5, 6, 6, 7,
-    4, 5, 5, 6, 5, 6, 6, 7,
-    5, 6, 6, 7, 6, 7, 7, 8];
+const ONE_BIT_COUNT: [u8; 256] = [
+    0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4, 1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5,
+    1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6,
+    1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6,
+    2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7,
+    1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6,
+    2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7,
+    2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7,
+    3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7, 4, 5, 5, 6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8,
+];
 
 impl MemorySpanData {
     // Sweep frees or collects finalizers for blocks not marked in the mark phase.
@@ -180,15 +167,17 @@ impl MemorySpanData {
         let span_sweep_generation = self.sweep_generation.load(Ordering::Relaxed);
 
         if self.state != State::InUse || span_sweep_generation != sweep_generation - 1 {
-        	//print("MSpan_Sweep: state=", s.state, " sweepgen=", s.sweepgen, " mheap.sweepgen=", sweepgen, "\n")
-        	panic!("MemorySpan#sweep: bad span state");
+            //print("MSpan_Sweep: state=", s.state, " sweepgen=", s.sweepgen, " mheap.sweepgen=", sweepgen, "\n")
+            panic!("MemorySpan#sweep: bad span state");
         }
 
         // if trace.enabled {
         // 	traceGCSweepSpan(s.npages * _PageSize)
         // }
 
-        memory_heap.pages_swept.fetch_add(self.number_of_pages, Ordering::Relaxed);
+        memory_heap
+            .pages_swept
+            .fetch_add(self.number_of_pages, Ordering::Relaxed);
 
         let span_class = self.span_class;
         let element_size = self.element_size;
@@ -211,86 +200,88 @@ impl MemorySpanData {
 
         // Count the number of free objects in this span.
         let number_of_allocations = self.count_allocations() as u16;
-        // if spc.sizeclass() == 0 && nalloc == 0 {
-        // 	s.needzero = 1
-        // 	freeToHeap = true
-        // }
-        // nfreed := s.allocCount - nalloc
-        // if nalloc > s.allocCount {
-        // 	print("runtime: nelems=", s.nelems, " nalloc=", nalloc, " previous allocCount=", s.allocCount, " nfreed=", nfreed, "\n")
-        // 	throw("sweep increased allocation count")
-        // }
-        //
-        // s.allocCount = nalloc
-        // wasempty := s.nextFreeIndex() == s.nelems
-        // s.freeindex = 0 // reset allocation index to start of span.
-        // if trace.enabled {
-        // 	getg().m.p.ptr().traceReclaimed += uintptr(nfreed) * s.elemsize
-        // }
-        //
-        // // gcmarkBits becomes the allocBits.
-        // // get a fresh cleared gcmarkBits in preparation for next GC
-        // s.allocBits = s.gcmarkBits
-        // s.gcmarkBits = newMarkBits(s.nelems)
-        //
-        // // Initialize alloc bits cache.
-        // s.refillAllocCache(0)
-        //
-        // // We need to set s.sweepgen = h.sweepgen only when all blocks are swept,
-        // // because of the potential for a concurrent free/SetFinalizer.
-        // // But we need to set it before we make the span available for allocation
-        // // (return it to heap or mcentral), because allocation code assumes that a
-        // // span is already swept if available for allocation.
-        // if freeToHeap || nfreed == 0 {
-        // 	// The span must be in our exclusive ownership until we update sweepgen,
-        // 	// check for potential races.
-        // 	if s.state != mSpanInUse || s.sweepgen != sweepgen-1 {
-        // 		print("MSpan_Sweep: state=", s.state, " sweepgen=", s.sweepgen, " mheap.sweepgen=", sweepgen, "\n")
-        // 		throw("MSpan_Sweep: bad span state after sweep")
-        // 	}
-        // 	// Serialization point.
-        // 	// At this point the mark bits are cleared and allocation ready
-        // 	// to go so release the span.
-        // 	atomic.Store(&s.sweepgen, sweepgen)
-        // }
-        //
-        // if nfreed > 0 && spc.sizeclass() != 0 {
-        // 	c.local_nsmallfree[spc.sizeclass()] += uintptr(nfreed)
-        // 	res = mheap_.central[spc].mcentral.freeSpan(s, preserve, wasempty)
-        // 	// MCentral_FreeSpan updates sweepgen
-        // } else if freeToHeap {
-        // 	// Free large span to heap
-        //
-        // 	// NOTE(rsc,dvyukov): The original implementation of efence
-        // 	// in CL 22060046 used SysFree instead of SysFault, so that
-        // 	// the operating system would eventually give the memory
-        // 	// back to us again, so that an efence program could run
-        // 	// longer without running out of memory. Unfortunately,
-        // 	// calling SysFree here without any kind of adjustment of the
-        // 	// heap data structures means that when the memory does
-        // 	// come back to us, we have the wrong metadata for it, either in
-        // 	// the MSpan structures or in the garbage collection bitmap.
-        // 	// Using SysFault here means that the program will run out of
-        // 	// memory fairly quickly in efence mode, but at least it won't
-        // 	// have mysterious crashes due to confused memory reuse.
-        // 	// It should be possible to switch back to SysFree if we also
-        // 	// implement and then call some kind of MHeap_DeleteSpan.
-        // 	if debug.efence > 0 {
-        // 		s.limit = 0 // prevent mlookup from finding this span
-        // 		sysFault(unsafe.Pointer(s.base()), size)
-        // 	} else {
-        // 		mheap_.freeSpan(s, 1)
-        // 	}
-        // 	c.local_nlargefree++
-        // 	c.local_largefree += size
-        // 	res = true
-        // }
-        // if !res {
-        // 	// The span has been swept and is still in-use, so put
-        // 	// it on the swept in-use list.
-        // 	mheap_.sweepSpans[sweepgen/2%2].push(s)
-        // }
-        // return res
+        if span_class.size_class() == 0 && number_of_allocations == 0 {
+            self.need_zero = 1;
+            free_to_heap = true;
+        }
+
+        let number_freed = self.allocations_count - number_of_allocations;
+        if number_of_allocations > self.allocations_count {
+            // print("runtime: nelems=", s.nelems, " nalloc=", nalloc, " previous allocCount=", s.allocCount, " nfreed=", nfreed, "\n")
+            panic!("sweep increased allocation count")
+        }
+
+        self.allocations_count = number_of_allocations;
+
+        let was_empty = self.next_free_index() == self.number_of_elements;
+        self.free_index = 0; // reset allocation index to start of span.
+                             // if trace.enabled {
+                             // 	getg().m.p.ptr().traceReclaimed += uintptr(nfreed) * s.elemsize
+                             // }
+                             //
+                             // // gcmarkBits becomes the allocBits.
+                             // // get a fresh cleared gcmarkBits in preparation for next GC
+                             // s.allocBits = s.gcmarkBits
+                             // s.gcmarkBits = newMarkBits(s.nelems)
+                             //
+                             // // Initialize alloc bits cache.
+                             // s.refillAllocCache(0)
+                             //
+                             // // We need to set s.sweepgen = h.sweepgen only when all blocks are swept,
+                             // // because of the potential for a concurrent free/SetFinalizer.
+                             // // But we need to set it before we make the span available for allocation
+                             // // (return it to heap or mcentral), because allocation code assumes that a
+                             // // span is already swept if available for allocation.
+                             // if freeToHeap || nfreed == 0 {
+                             // 	// The span must be in our exclusive ownership until we update sweepgen,
+                             // 	// check for potential races.
+                             // 	if s.state != mSpanInUse || s.sweepgen != sweepgen-1 {
+                             // 		print("MSpan_Sweep: state=", s.state, " sweepgen=", s.sweepgen, " mheap.sweepgen=", sweepgen, "\n")
+                             // 		throw("MSpan_Sweep: bad span state after sweep")
+                             // 	}
+                             // 	// Serialization point.
+                             // 	// At this point the mark bits are cleared and allocation ready
+                             // 	// to go so release the span.
+                             // 	atomic.Store(&s.sweepgen, sweepgen)
+                             // }
+                             //
+                             // if nfreed > 0 && spc.sizeclass() != 0 {
+                             // 	c.local_nsmallfree[spc.sizeclass()] += uintptr(nfreed)
+                             // 	res = mheap_.central[spc].mcentral.freeSpan(s, preserve, wasempty)
+                             // 	// MCentral_FreeSpan updates sweepgen
+                             // } else if freeToHeap {
+                             // 	// Free large span to heap
+                             //
+                             // 	// NOTE(rsc,dvyukov): The original implementation of efence
+                             // 	// in CL 22060046 used SysFree instead of SysFault, so that
+                             // 	// the operating system would eventually give the memory
+                             // 	// back to us again, so that an efence program could run
+                             // 	// longer without running out of memory. Unfortunately,
+                             // 	// calling SysFree here without any kind of adjustment of the
+                             // 	// heap data structures means that when the memory does
+                             // 	// come back to us, we have the wrong metadata for it, either in
+                             // 	// the MSpan structures or in the garbage collection bitmap.
+                             // 	// Using SysFault here means that the program will run out of
+                             // 	// memory fairly quickly in efence mode, but at least it won't
+                             // 	// have mysterious crashes due to confused memory reuse.
+                             // 	// It should be possible to switch back to SysFree if we also
+                             // 	// implement and then call some kind of MHeap_DeleteSpan.
+                             // 	if debug.efence > 0 {
+                             // 		s.limit = 0 // prevent mlookup from finding this span
+                             // 		sysFault(unsafe.Pointer(s.base()), size)
+                             // 	} else {
+                             // 		mheap_.freeSpan(s, 1)
+                             // 	}
+                             // 	c.local_nlargefree++
+                             // 	c.local_largefree += size
+                             // 	res = true
+                             // }
+                             // if !res {
+                             // 	// The span has been swept and is still in-use, so put
+                             // 	// it on the swept in-use list.
+                             // 	mheap_.sweepSpans[sweepgen/2%2].push(s)
+                             // }
+                             // return res
         false
     }
 
@@ -379,7 +370,7 @@ impl MemorySpanData {
     // scanning the allocation bitmap.
     // TODO:(rlh) Use popcount intrinsic.
     fn count_allocations(&mut self) -> usize {
-        let mut count : usize = 0;
+        let mut count: usize = 0;
         let max_index = (self.number_of_elements / 8) as isize;
         for i in 0..max_index {
             let mark_bits = unsafe { *self.gc_mark_bits.as_ptr().offset(i) } as usize;
@@ -395,4 +386,58 @@ impl MemorySpanData {
         count
     }
 
+    // nextFreeIndex returns the index of the next free object in s at
+    // or after s.freeindex.
+    // There are hardware instructions that can be used to make this
+    // faster if profiling warrants it.
+    fn next_free_index(&self) -> usize {
+        let span_free_index = self.free_index;
+        let span_number_of_elements = self.number_of_elements;
+
+        if span_free_index == span_number_of_elements {
+            return span_free_index;
+        }
+
+        if span_free_index > span_number_of_elements {
+            panic!("span.free_index > span.number_of_elements");
+        }
+
+        let alloc_cache = self.alloc_cache;
+        let mut bit_index = alloc_cache.trailing_zeros();
+        while bit_index == 64 {
+            // 	// Move index to start of next cached bits.
+            // 	sfreeindex = (sfreeindex + 64) &^ (64 - 1)
+            // 	if sfreeindex >= snelems {
+            // 		s.freeindex = snelems
+            // 		return snelems
+            // 	}
+            // 	whichByte := sfreeindex / 8
+            // 	// Refill s.allocCache with the next 64 alloc bits.
+            // 	s.refillAllocCache(whichByte)
+            let alloc_cache = self.alloc_cache;
+            let mut bit_index = alloc_cache.trailing_zeros();
+            // nothing available in cached bits
+            // grab the next 8 bytes and try again.
+        }
+        let result = span_free_index; //+ uintptr(bitIndex)
+                                      // if result >= snelems {
+                                      // 	s.freeindex = snelems
+                                      // 	return snelems
+                                      // }
+                                      //
+                                      // s.allocCache >>= uint(bitIndex + 1)
+                                      // sfreeindex = result + 1
+                                      //
+                                      // if sfreeindex%64 == 0 && sfreeindex != snelems {
+                                      // 	// We just incremented s.freeindex so it isn't 0.
+                                      // 	// As each 1 in s.allocCache was encountered and used for allocation
+                                      // 	// it was shifted away. At this point s.allocCache contains all 0s.
+                                      // 	// Refill s.allocCache so that it corresponds
+                                      // 	// to the bits at s.allocBits starting at s.freeindex.
+                                      // 	whichByte := sfreeindex / 8
+                                      // 	s.refillAllocCache(whichByte)
+                                      // }
+                                      // s.freeindex = sfreeindex
+        return result;
+    }
 }

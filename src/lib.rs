@@ -12,16 +12,16 @@
 #![feature(allocator_api)]
 #![feature(ptr_internals)]
 
-pub mod memory_span;
-pub mod sweep_buffer;
 pub mod memory_heap;
+pub mod memory_span;
 pub mod size_classes;
+pub mod sweep_buffer;
 
-use futures::sync::{oneshot, mpsc};
 use futures::stream::Stream;
+use futures::sync::{mpsc, oneshot};
 use futures_future::futures_future;
-use std::sync::{Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use self::memory_heap::*;
 
@@ -44,8 +44,10 @@ pub struct BackgroundSweep {
 impl BackgroundSweep {
     fn wait_for_unpark(&self) -> mpsc::Receiver<bool> {
         let (unpark_sender, unpark_receiver) = mpsc::channel::<bool>(0);
-        let mut sender_field = self.unpark_sender.lock()
-        .expect("Could not get ready sender lock");
+        let mut sender_field = self
+            .unpark_sender
+            .lock()
+            .expect("Could not get ready sender lock");
         *sender_field = Some(unpark_sender);
         unpark_receiver
     }
@@ -91,7 +93,11 @@ impl GC {
         // This assignment is to a block, so that the lock is released at the end of it and
         // we can safely wait for something to signal us that the gc is ready.
         let unpark = {
-            let mut sweep_parked = self.background_sweep.parked.lock().expect("Could not get lock on SweepData");
+            let mut sweep_parked = self
+                .background_sweep
+                .parked
+                .lock()
+                .expect("Could not get lock on SweepData");
             *sweep_parked = true;
 
             let _ = signal_setup_done.send(true);
@@ -109,16 +115,21 @@ impl GC {
                 yield
             }
 
-            while self.free_some_work_buffers(true) { yield }
+            while self.free_some_work_buffers(true) {
+                yield
+            }
 
-            let mut sweep_parked = self.background_sweep.parked.lock()
-            .expect("Could not get background sweeper parked lock");
+            let mut sweep_parked = self
+                .background_sweep
+                .parked
+                .lock()
+                .expect("Could not get background sweeper parked lock");
 
             if !self.memory_heap.sweep_done.load(Ordering::Relaxed) {
                 // This can happen if a GC runs between
                 // sweep_one returning !0 above
                 // and the lock being acquired.
-                continue
+                continue;
             }
 
             *sweep_parked = true;
@@ -130,28 +141,27 @@ impl GC {
     // true if it should be called again to free more.
     fn free_some_work_buffers(&self, preemptible: bool) -> bool {
         let batch_size = 64; // ~1–2 µs per span.
-        // lock(&work.wbufSpans.lock)
-        // if gcphase != _GCoff || work.wbufSpans.free.isEmpty() {
-        // 	unlock(&work.wbufSpans.lock)
-        // 	return false
-        // }
-        // systemstack(func() {
-        // 	gp := getg().m.curg
-        // 	for i := 0; i < batchSize && !(preemptible && gp.preempt); i++ {
-        // 		span := work.wbufSpans.free.first
-        // 		if span == nil {
-        // 			break
-        // 		}
-        // 		work.wbufSpans.free.remove(span)
-        // 		mheap_.freeManual(span, &memstats.gc_sys)
-        // 	}
-        // })
-        // more := !work.wbufSpans.free.isEmpty()
-        // unlock(&work.wbufSpans.lock)
-        // return more
+                             // lock(&work.wbufSpans.lock)
+                             // if gcphase != _GCoff || work.wbufSpans.free.isEmpty() {
+                             // 	unlock(&work.wbufSpans.lock)
+                             // 	return false
+                             // }
+                             // systemstack(func() {
+                             // 	gp := getg().m.curg
+                             // 	for i := 0; i < batchSize && !(preemptible && gp.preempt); i++ {
+                             // 		span := work.wbufSpans.free.first
+                             // 		if span == nil {
+                             // 			break
+                             // 		}
+                             // 		work.wbufSpans.free.remove(span)
+                             // 		mheap_.freeManual(span, &memstats.gc_sys)
+                             // 	}
+                             // })
+                             // more := !work.wbufSpans.free.isEmpty()
+                             // unlock(&work.wbufSpans.lock)
+                             // return more
         false
     }
-
 
     // sweeps one span
     // returns number of pages returned to heap, or !0 if there is nothing to sweep
@@ -169,15 +179,18 @@ impl GC {
             !0
         } else {
             self.memory_heap.sweepers.fetch_add(1, Ordering::Relaxed);
-            let mut number_of_pages : usize = !0;
+            let mut number_of_pages: usize = !0;
             let sweep_generation = self.memory_heap.sweep_generation.load(Ordering::Relaxed);
 
             loop {
-                let maybe_span = self.memory_heap.get_popable_sweep_buffer(sweep_generation).pop();
+                let maybe_span = self
+                    .memory_heap
+                    .get_popable_sweep_buffer(sweep_generation)
+                    .pop();
                 match maybe_span {
                     None => {
                         self.memory_heap.sweep_done.store(true, Ordering::Relaxed);
-                    },
+                    }
                     Some(mut span) => {
                         let span = unsafe { span.as_mut() };
                         //TODO non-atomic read on sweep_generation?
@@ -190,15 +203,16 @@ impl GC {
                                 // print("runtime: bad span s.state=", s.state, " s.sweepgen=", s.sweepgen, " sweepgen=", sg, "\n")
                                 panic!("non in-use span in unswept list")
                             }
-                            continue
+                            continue;
                         }
                         if span_sweep_generation != sweep_generation - 2 ||
                         // if the span_sweep_generation is not sweep_generation - 2
                         // or, if it is, but when we try to update it to be sweep_generation -1
                         //, it is not, we continue the loop
                         sweep_generation - 2 == span.sweep_generation.compare_and_swap(
-                                sweep_generation - 2, sweep_generation - 1, Ordering::Relaxed) {
-                            continue
+                                sweep_generation - 2, sweep_generation - 1, Ordering::Relaxed)
+                        {
+                            continue;
                         }
                         number_of_pages = span.number_of_pages;
                         if !span.sweep(&self.memory_heap, false) {
@@ -209,13 +223,14 @@ impl GC {
                         }
                     }
                 };
-                break
+                break;
             }
 
             // Decrement the number of active sweepers and if this is the
             // last one print trace information.
-            if self.memory_heap.sweepers.fetch_sub(1, Ordering::Relaxed) == 0 &&
-                    self.memory_heap.sweep_done.load(Ordering::Relaxed) {
+            if self.memory_heap.sweepers.fetch_sub(1, Ordering::Relaxed) == 0
+                && self.memory_heap.sweep_done.load(Ordering::Relaxed)
+            {
                 // if debug.gcpacertrace > 0 {
                 // 	print("pacer: sweep done at heap size ", memstats.heap_live>>20, "MB; allocated ", (memstats.heap_live-mheap_.sweepHeapLiveBasis)>>20, "MB during sweep; swept ", mheap_.pagesSwept, " pages at ", sweepRatio, " pages/byte\n")
                 // }
@@ -223,10 +238,8 @@ impl GC {
 
             number_of_pages
         }
-
     }
 }
 
 #[test]
-fn it_works() {
-}
+fn it_works() {}
