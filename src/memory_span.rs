@@ -390,8 +390,8 @@ impl MemorySpanData {
     // or after s.freeindex.
     // There are hardware instructions that can be used to make this
     // faster if profiling warrants it.
-    fn next_free_index(&self) -> usize {
-        let span_free_index = self.free_index;
+    fn next_free_index(&mut self) -> usize {
+        let mut span_free_index = self.free_index;
         let span_number_of_elements = self.number_of_elements;
 
         if span_free_index == span_number_of_elements {
@@ -405,39 +405,59 @@ impl MemorySpanData {
         let alloc_cache = self.alloc_cache;
         let mut bit_index = alloc_cache.trailing_zeros();
         while bit_index == 64 {
-            // 	// Move index to start of next cached bits.
-            // 	sfreeindex = (sfreeindex + 64) &^ (64 - 1)
-            // 	if sfreeindex >= snelems {
-            // 		s.freeindex = snelems
-            // 		return snelems
-            // 	}
-            // 	whichByte := sfreeindex / 8
-            // 	// Refill s.allocCache with the next 64 alloc bits.
-            // 	s.refillAllocCache(whichByte)
+            // Move index to start of next cached bits.
+            span_free_index = (span_free_index + 64) & !(64 - 1); //TODO what is !(64-1)?
+            if span_free_index >= span_number_of_elements {
+                self.free_index = span_number_of_elements;
+                return span_number_of_elements;
+            }
+
+            let which_byte = span_free_index / 8;
+            // Refill s.allocCache with the next 64 alloc bits.
+            self.refill_allocations_cache(which_byte);
+
             let alloc_cache = self.alloc_cache;
-            let mut bit_index = alloc_cache.trailing_zeros();
+            bit_index = alloc_cache.trailing_zeros();
             // nothing available in cached bits
             // grab the next 8 bytes and try again.
         }
-        let result = span_free_index; //+ uintptr(bitIndex)
-                                      // if result >= snelems {
-                                      // 	s.freeindex = snelems
-                                      // 	return snelems
-                                      // }
-                                      //
-                                      // s.allocCache >>= uint(bitIndex + 1)
-                                      // sfreeindex = result + 1
-                                      //
-                                      // if sfreeindex%64 == 0 && sfreeindex != snelems {
-                                      // 	// We just incremented s.freeindex so it isn't 0.
-                                      // 	// As each 1 in s.allocCache was encountered and used for allocation
-                                      // 	// it was shifted away. At this point s.allocCache contains all 0s.
-                                      // 	// Refill s.allocCache so that it corresponds
-                                      // 	// to the bits at s.allocBits starting at s.freeindex.
-                                      // 	whichByte := sfreeindex / 8
-                                      // 	s.refillAllocCache(whichByte)
-                                      // }
-                                      // s.freeindex = sfreeindex
-        return result;
+        let result = span_free_index + (bit_index as usize);
+        if result >= span_number_of_elements {
+            self.free_index = span_number_of_elements;
+            return span_number_of_elements;
+        }
+
+        self.alloc_cache >>= (bit_index + 1) as usize;
+        span_free_index = result + 1;
+
+        if span_free_index % 64 == 0 && span_free_index != span_number_of_elements {
+            // We just incremented self.free_index so it isn't 0.
+            // As each 1 in self.alloc_cache was encountered and used for allocation
+            // it was shifted away. At this point self.alloc_cache contains all 0s.
+            // Refill self.alloc_cache so that it corresponds
+            // to the bits at s.allocBits starting at s.freeindex.
+            let which_byte = span_free_index / 8;
+            self.refill_allocations_cache(which_byte);
+        }
+        self.free_index = span_free_index;
+        result
+    }
+
+    // refillaCache takes 8 bytes s.allocBits starting at whichByte
+    // and negates them so that ctz (count trailing zeros) instructions
+    // can be used. It then places these 8 bytes into the cached 64 bit
+    // s.allocCache.
+    fn refill_allocations_cache(&mut self, which_byte: usize) {
+        // bytes := (*[8]uint8)(unsafe.Pointer(s.allocBits.bytep(whichByte)))
+        // aCache := uint64(0)
+        // aCache |= uint64(bytes[0])
+        // aCache |= uint64(bytes[1]) << (1 * 8)
+        // aCache |= uint64(bytes[2]) << (2 * 8)
+        // aCache |= uint64(bytes[3]) << (3 * 8)
+        // aCache |= uint64(bytes[4]) << (4 * 8)
+        // aCache |= uint64(bytes[5]) << (5 * 8)
+        // aCache |= uint64(bytes[6]) << (6 * 8)
+        // aCache |= uint64(bytes[7]) << (7 * 8)
+        // s.allocCache = ^aCache
     }
 }
