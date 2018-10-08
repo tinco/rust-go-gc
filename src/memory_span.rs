@@ -64,7 +64,7 @@ pub struct MemorySpanData {
     // The sweep will free the old allocBits and set allocBits to the
     // gcmarkBits. The gcmarkBits are replaced with a fresh zeroed
     // out memory.
-    // allocBits  *gcBits
+    pub alloc_bits: Unique<u8>,
     pub gc_mark_bits: Unique<u8>,
 
     // // sweep generation:
@@ -443,21 +443,26 @@ impl MemorySpanData {
         result
     }
 
-    // refillaCache takes 8 bytes s.allocBits starting at whichByte
+    // refill_allocations_cache takes 8 bytes s.allocBits starting at which_byte
     // and negates them so that ctz (count trailing zeros) instructions
     // can be used. It then places these 8 bytes into the cached 64 bit
-    // s.allocCache.
+    // span.alloc_cache.
+    // TODO use byteorder crate (https://crates.io/crates/byteorder)
     fn refill_allocations_cache(&mut self, which_byte: usize) {
-        // bytes := (*[8]uint8)(unsafe.Pointer(s.allocBits.bytep(whichByte)))
-        // aCache := uint64(0)
-        // aCache |= uint64(bytes[0])
-        // aCache |= uint64(bytes[1]) << (1 * 8)
-        // aCache |= uint64(bytes[2]) << (2 * 8)
-        // aCache |= uint64(bytes[3]) << (3 * 8)
-        // aCache |= uint64(bytes[4]) << (4 * 8)
-        // aCache |= uint64(bytes[5]) << (5 * 8)
-        // aCache |= uint64(bytes[6]) << (6 * 8)
-        // aCache |= uint64(bytes[7]) << (7 * 8)
-        // s.allocCache = ^aCache
+        let mut alloc_cache : u64 = 0;
+
+        unsafe {
+            let bytes = self.alloc_bits.as_ptr().offset(which_byte as isize);
+            alloc_cache |= *bytes as u64;
+            alloc_cache |= (*bytes.offset(1) as u64) << (1*8);
+            alloc_cache |= (*bytes.offset(2) as u64) << (2*8);
+            alloc_cache |= (*bytes.offset(3) as u64) << (3*8);
+            alloc_cache |= (*bytes.offset(4) as u64) << (4*8);
+            alloc_cache |= (*bytes.offset(5) as u64) << (5*8);
+            alloc_cache |= (*bytes.offset(6) as u64) << (6*8);
+            alloc_cache |= (*bytes.offset(7) as u64) << (7*8);
+        }
+
+        self.alloc_cache = alloc_cache;
     }
 }
