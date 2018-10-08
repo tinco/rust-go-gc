@@ -45,15 +45,41 @@ pub fn new_sweep() -> BackgroundSweep {
     }
 }
 
+const GC_BITS_CHUNK_BYTES: usize = 64 << 10;
+// const GC_BITS_HEADER_BYTES : usize = unsafe.Sizeof(gcBitsHeader{});
+
+struct GCBitsHeader {
+    // free uintptr // free is the index into bits of the next free byte.
+// next uintptr // *gcBits triggers recursive type bug. (issue 14620)
+}
+
+//go:notinheap
+struct GCBitsArena {
+    // // gcBitsHeader // side step recursive type bug (issue 14620) by including fields by hand.
+// free uintptr // free is the index into bits of the next free byte; read/write atomically
+// next *gcBitsArena
+// bits [gcBitsChunkBytes - gcBitsHeaderBytes]gcBits
+}
+
+struct GCBitsArenas {
+    // lock     mutex
+// free     *gcBitsArena
+// next     *gcBitsArena // Read atomically. Write atomically under lock.
+// current  *gcBitsArena
+// previous *gcBitsArena
+}
+
 pub struct GC {
     background_sweep: BackgroundSweep,
     pub memory_heap: MemoryHeap,
+    bits_arenas: GCBitsArenas,
 }
 
 pub fn new_gc() -> GC {
     GC {
         background_sweep: new_sweep(),
         memory_heap: new_memory_heap(),
+        bits_arenas: GCBitsArenas {},
     }
 }
 
@@ -220,5 +246,9 @@ impl GC {
 
             number_of_pages
         }
+    }
+
+    pub fn new_mark_bits(&mut self, number_of_elements: usize) -> std::ptr::Unique<u8> {
+        std::ptr::Unique::empty()
     }
 }

@@ -1,5 +1,4 @@
 use super::size_classes::*;
-use std::mem;
 use std::ptr::Unique;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -226,7 +225,7 @@ impl MemorySpanData {
         // gcmarkBits becomes the allocBits.
         // get a fresh cleared gcmarkBits in preparation for next GC
         self.alloc_bits = self.gc_mark_bits;
-        // self.gc_mark_bits = gc.new_mark_bits(self.number_of_elements);
+        self.gc_mark_bits = gc.new_mark_bits(self.number_of_elements);
 
         // // Initialize alloc bits cache.
         // s.refillAllocCache(0)
