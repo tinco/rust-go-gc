@@ -3,6 +3,8 @@ use super::size_classes::*;
 use std::ptr::Unique;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use super::gc;
+
 pub struct MemorySpanData {
     // next *mspan     // next span in list, or nil if none
     // prev *mspan     // previous span in list, or nil if none
@@ -158,12 +160,12 @@ impl MemorySpanData {
     // If preserve=true, don't return it to heap nor relink in MCentral lists;
     // caller takes care of it.
     //TODO go:nowritebarrier
-    pub fn sweep(&mut self, memory_heap: &MemoryHeap, reserve: bool) -> bool {
+    pub fn sweep(&mut self, gc: &mut gc::GC, reserve: bool) -> bool {
         // It's critical that we enter this function with preemption disabled,
         // GC must not start while we are in the middle of this function.
         // Since we're not preempting any Rust code, we don't have to worry about that.
 
-        let sweep_generation = memory_heap.sweep_generation.load(Ordering::Relaxed);
+        let sweep_generation = gc.memory_heap.sweep_generation.load(Ordering::Relaxed);
         let span_sweep_generation = self.sweep_generation.load(Ordering::Relaxed);
 
         if self.state != State::InUse || span_sweep_generation != sweep_generation - 1 {
@@ -175,7 +177,7 @@ impl MemorySpanData {
         // 	traceGCSweepSpan(s.npages * _PageSize)
         // }
 
-        memory_heap
+        gc.memory_heap
             .pages_swept
             .fetch_add(self.number_of_pages, Ordering::Relaxed);
 
@@ -214,74 +216,76 @@ impl MemorySpanData {
         self.allocations_count = number_of_allocations;
 
         let was_empty = self.next_free_index() == self.number_of_elements;
-        self.free_index = 0; // reset allocation index to start of span.
-                             // if trace.enabled {
-                             // 	getg().m.p.ptr().traceReclaimed += uintptr(nfreed) * s.elemsize
-                             // }
-                             //
-                             // // gcmarkBits becomes the allocBits.
-                             // // get a fresh cleared gcmarkBits in preparation for next GC
-                             // s.allocBits = s.gcmarkBits
-                             // s.gcmarkBits = newMarkBits(s.nelems)
-                             //
-                             // // Initialize alloc bits cache.
-                             // s.refillAllocCache(0)
-                             //
-                             // // We need to set s.sweepgen = h.sweepgen only when all blocks are swept,
-                             // // because of the potential for a concurrent free/SetFinalizer.
-                             // // But we need to set it before we make the span available for allocation
-                             // // (return it to heap or mcentral), because allocation code assumes that a
-                             // // span is already swept if available for allocation.
-                             // if freeToHeap || nfreed == 0 {
-                             // 	// The span must be in our exclusive ownership until we update sweepgen,
-                             // 	// check for potential races.
-                             // 	if s.state != mSpanInUse || s.sweepgen != sweepgen-1 {
-                             // 		print("MSpan_Sweep: state=", s.state, " sweepgen=", s.sweepgen, " mheap.sweepgen=", sweepgen, "\n")
-                             // 		throw("MSpan_Sweep: bad span state after sweep")
-                             // 	}
-                             // 	// Serialization point.
-                             // 	// At this point the mark bits are cleared and allocation ready
-                             // 	// to go so release the span.
-                             // 	atomic.Store(&s.sweepgen, sweepgen)
-                             // }
-                             //
-                             // if nfreed > 0 && spc.sizeclass() != 0 {
-                             // 	c.local_nsmallfree[spc.sizeclass()] += uintptr(nfreed)
-                             // 	res = mheap_.central[spc].mcentral.freeSpan(s, preserve, wasempty)
-                             // 	// MCentral_FreeSpan updates sweepgen
-                             // } else if freeToHeap {
-                             // 	// Free large span to heap
-                             //
-                             // 	// NOTE(rsc,dvyukov): The original implementation of efence
-                             // 	// in CL 22060046 used SysFree instead of SysFault, so that
-                             // 	// the operating system would eventually give the memory
-                             // 	// back to us again, so that an efence program could run
-                             // 	// longer without running out of memory. Unfortunately,
-                             // 	// calling SysFree here without any kind of adjustment of the
-                             // 	// heap data structures means that when the memory does
-                             // 	// come back to us, we have the wrong metadata for it, either in
-                             // 	// the MSpan structures or in the garbage collection bitmap.
-                             // 	// Using SysFault here means that the program will run out of
-                             // 	// memory fairly quickly in efence mode, but at least it won't
-                             // 	// have mysterious crashes due to confused memory reuse.
-                             // 	// It should be possible to switch back to SysFree if we also
-                             // 	// implement and then call some kind of MHeap_DeleteSpan.
-                             // 	if debug.efence > 0 {
-                             // 		s.limit = 0 // prevent mlookup from finding this span
-                             // 		sysFault(unsafe.Pointer(s.base()), size)
-                             // 	} else {
-                             // 		mheap_.freeSpan(s, 1)
-                             // 	}
-                             // 	c.local_nlargefree++
-                             // 	c.local_largefree += size
-                             // 	res = true
-                             // }
-                             // if !res {
-                             // 	// The span has been swept and is still in-use, so put
-                             // 	// it on the swept in-use list.
-                             // 	mheap_.sweepSpans[sweepgen/2%2].push(s)
-                             // }
-                             // return res
+
+        // reset allocation index to start of span.
+        self.free_index = 0;
+        // if trace.enabled {
+        // 	getg().m.p.ptr().traceReclaimed += uintptr(nfreed) * s.elemsize
+        // }
+        //
+        // gcmarkBits becomes the allocBits.
+        // get a fresh cleared gcmarkBits in preparation for next GC
+        self.alloc_bits = self.gc_mark_bits;
+        // self.gc_mark_bits = newMarkBits(s.nelems)
+        //
+        // // Initialize alloc bits cache.
+        // s.refillAllocCache(0)
+        //
+        // // We need to set s.sweepgen = h.sweepgen only when all blocks are swept,
+        // // because of the potential for a concurrent free/SetFinalizer.
+        // // But we need to set it before we make the span available for allocation
+        // // (return it to heap or mcentral), because allocation code assumes that a
+        // // span is already swept if available for allocation.
+        // if freeToHeap || nfreed == 0 {
+        // 	// The span must be in our exclusive ownership until we update sweepgen,
+        // 	// check for potential races.
+        // 	if s.state != mSpanInUse || s.sweepgen != sweepgen-1 {
+        // 		print("MSpan_Sweep: state=", s.state, " sweepgen=", s.sweepgen, " mheap.sweepgen=", sweepgen, "\n")
+        // 		throw("MSpan_Sweep: bad span state after sweep")
+        // 	}
+        // 	// Serialization point.
+        // 	// At this point the mark bits are cleared and allocation ready
+        // 	// to go so release the span.
+        // 	atomic.Store(&s.sweepgen, sweepgen)
+        // }
+        //
+        // if nfreed > 0 && spc.sizeclass() != 0 {
+        // 	c.local_nsmallfree[spc.sizeclass()] += uintptr(nfreed)
+        // 	res = mheap_.central[spc].mcentral.freeSpan(s, preserve, wasempty)
+        // 	// MCentral_FreeSpan updates sweepgen
+        // } else if freeToHeap {
+        // 	// Free large span to heap
+        //
+        // 	// NOTE(rsc,dvyukov): The original implementation of efence
+        // 	// in CL 22060046 used SysFree instead of SysFault, so that
+        // 	// the operating system would eventually give the memory
+        // 	// back to us again, so that an efence program could run
+        // 	// longer without running out of memory. Unfortunately,
+        // 	// calling SysFree here without any kind of adjustment of the
+        // 	// heap data structures means that when the memory does
+        // 	// come back to us, we have the wrong metadata for it, either in
+        // 	// the MSpan structures or in the garbage collection bitmap.
+        // 	// Using SysFault here means that the program will run out of
+        // 	// memory fairly quickly in efence mode, but at least it won't
+        // 	// have mysterious crashes due to confused memory reuse.
+        // 	// It should be possible to switch back to SysFree if we also
+        // 	// implement and then call some kind of MHeap_DeleteSpan.
+        // 	if debug.efence > 0 {
+        // 		s.limit = 0 // prevent mlookup from finding this span
+        // 		sysFault(unsafe.Pointer(s.base()), size)
+        // 	} else {
+        // 		mheap_.freeSpan(s, 1)
+        // 	}
+        // 	c.local_nlargefree++
+        // 	c.local_largefree += size
+        // 	res = true
+        // }
+        // if !res {
+        // 	// The span has been swept and is still in-use, so put
+        // 	// it on the swept in-use list.
+        // 	mheap_.sweepSpans[sweepgen/2%2].push(s)
+        // }
+        // return res
         false
     }
 
@@ -341,6 +345,7 @@ impl MemorySpanData {
         // }
     }
 
+    // TODO this one is not functionally necessary I think
     fn maybe_trace_free(&mut self) {
         // if debug.allocfreetrace != 0 || raceenabled || msanenabled {
         // 	// Find all newly freed objects. This doesn't have to
@@ -449,18 +454,18 @@ impl MemorySpanData {
     // span.alloc_cache.
     // TODO use byteorder crate (https://crates.io/crates/byteorder)
     fn refill_allocations_cache(&mut self, which_byte: usize) {
-        let mut alloc_cache : u64 = 0;
+        let mut alloc_cache: u64 = 0;
 
         unsafe {
             let bytes = self.alloc_bits.as_ptr().offset(which_byte as isize);
             alloc_cache |= *bytes as u64;
-            alloc_cache |= (*bytes.offset(1) as u64) << (1*8);
-            alloc_cache |= (*bytes.offset(2) as u64) << (2*8);
-            alloc_cache |= (*bytes.offset(3) as u64) << (3*8);
-            alloc_cache |= (*bytes.offset(4) as u64) << (4*8);
-            alloc_cache |= (*bytes.offset(5) as u64) << (5*8);
-            alloc_cache |= (*bytes.offset(6) as u64) << (6*8);
-            alloc_cache |= (*bytes.offset(7) as u64) << (7*8);
+            alloc_cache |= (*bytes.offset(1) as u64) << (1 * 8);
+            alloc_cache |= (*bytes.offset(2) as u64) << (2 * 8);
+            alloc_cache |= (*bytes.offset(3) as u64) << (3 * 8);
+            alloc_cache |= (*bytes.offset(4) as u64) << (4 * 8);
+            alloc_cache |= (*bytes.offset(5) as u64) << (5 * 8);
+            alloc_cache |= (*bytes.offset(6) as u64) << (6 * 8);
+            alloc_cache |= (*bytes.offset(7) as u64) << (7 * 8);
         }
 
         self.alloc_cache = alloc_cache;
