@@ -1,5 +1,5 @@
-use super::memory_heap::*;
 use super::size_classes::*;
+use std::mem;
 use std::ptr::Unique;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -226,8 +226,8 @@ impl MemorySpanData {
         // gcmarkBits becomes the allocBits.
         // get a fresh cleared gcmarkBits in preparation for next GC
         self.alloc_bits = self.gc_mark_bits;
-        // self.gc_mark_bits = newMarkBits(s.nelems)
-        //
+        // self.gc_mark_bits = gc.new_mark_bits(self.number_of_elements);
+
         // // Initialize alloc bits cache.
         // s.refillAllocCache(0)
         //
@@ -452,22 +452,10 @@ impl MemorySpanData {
     // and negates them so that ctz (count trailing zeros) instructions
     // can be used. It then places these 8 bytes into the cached 64 bit
     // span.alloc_cache.
-    // TODO use byteorder crate (https://crates.io/crates/byteorder)
     fn refill_allocations_cache(&mut self, which_byte: usize) {
-        let mut alloc_cache: u64 = 0;
-
-        unsafe {
-            let bytes = self.alloc_bits.as_ptr().offset(which_byte as isize);
-            alloc_cache |= *bytes as u64;
-            alloc_cache |= (*bytes.offset(1) as u64) << (1 * 8);
-            alloc_cache |= (*bytes.offset(2) as u64) << (2 * 8);
-            alloc_cache |= (*bytes.offset(3) as u64) << (3 * 8);
-            alloc_cache |= (*bytes.offset(4) as u64) << (4 * 8);
-            alloc_cache |= (*bytes.offset(5) as u64) << (5 * 8);
-            alloc_cache |= (*bytes.offset(6) as u64) << (6 * 8);
-            alloc_cache |= (*bytes.offset(7) as u64) << (7 * 8);
-        }
-
-        self.alloc_cache = alloc_cache;
+        let bytes =
+            unsafe { *(self.alloc_bits.as_ptr().offset(which_byte as isize) as *const [u8; 8]) };
+        let alloc_cache = u64::from_le_bytes(bytes);
+        self.alloc_cache = !alloc_cache;
     }
 }

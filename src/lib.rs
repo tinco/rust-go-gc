@@ -11,6 +11,7 @@
 #![feature(generators)]
 #![feature(allocator_api)]
 #![feature(ptr_internals)]
+#![feature(int_to_from_bytes)]
 
 pub mod gc;
 pub mod memory_heap;
