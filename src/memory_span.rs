@@ -135,8 +135,8 @@ impl SpanClass {
     }
 }
 
-const NUM_SPAN_CLASSES: SpanClass = SpanClass(NUM_SIZE_CLASSES << 1);
-const TINY_SPAN_CLASS: SpanClass = SpanClass(TINY_SIZE_CLASS << 1 | 1);
+pub const NUM_SPAN_CLASSES: SpanClass = SpanClass(NUM_SIZE_CLASSES << 1);
+pub const TINY_SPAN_CLASS: SpanClass = SpanClass(TINY_SIZE_CLASS << 1 | 1);
 
 // oneBitCount is indexed by byte and produces the
 // number of 1 bits in that byte. For example 128 has 1 bit set
@@ -182,7 +182,7 @@ impl MemorySpanData {
 
         let span_class = self.span_class;
         let element_size = self.element_size;
-        let result = false;
+        let mut result = false;
 
         // Unlink & free special records for any objects we're about to free.
         self.free_specials();
@@ -227,65 +227,74 @@ impl MemorySpanData {
         self.alloc_bits = self.gc_mark_bits;
         self.gc_mark_bits = gc.new_mark_bits(self.number_of_elements);
 
-        // // Initialize alloc bits cache.
-        // s.refillAllocCache(0)
-        //
-        // // We need to set s.sweepgen = h.sweepgen only when all blocks are swept,
-        // // because of the potential for a concurrent free/SetFinalizer.
-        // // But we need to set it before we make the span available for allocation
-        // // (return it to heap or mcentral), because allocation code assumes that a
-        // // span is already swept if available for allocation.
-        // if freeToHeap || nfreed == 0 {
-        // 	// The span must be in our exclusive ownership until we update sweepgen,
-        // 	// check for potential races.
-        // 	if s.state != mSpanInUse || s.sweepgen != sweepgen-1 {
-        // 		print("MSpan_Sweep: state=", s.state, " sweepgen=", s.sweepgen, " mheap.sweepgen=", sweepgen, "\n")
-        // 		throw("MSpan_Sweep: bad span state after sweep")
-        // 	}
-        // 	// Serialization point.
-        // 	// At this point the mark bits are cleared and allocation ready
-        // 	// to go so release the span.
-        // 	atomic.Store(&s.sweepgen, sweepgen)
-        // }
-        //
-        // if nfreed > 0 && spc.sizeclass() != 0 {
-        // 	c.local_nsmallfree[spc.sizeclass()] += uintptr(nfreed)
-        // 	res = mheap_.central[spc].mcentral.freeSpan(s, preserve, wasempty)
-        // 	// MCentral_FreeSpan updates sweepgen
-        // } else if freeToHeap {
-        // 	// Free large span to heap
-        //
-        // 	// NOTE(rsc,dvyukov): The original implementation of efence
-        // 	// in CL 22060046 used SysFree instead of SysFault, so that
-        // 	// the operating system would eventually give the memory
-        // 	// back to us again, so that an efence program could run
-        // 	// longer without running out of memory. Unfortunately,
-        // 	// calling SysFree here without any kind of adjustment of the
-        // 	// heap data structures means that when the memory does
-        // 	// come back to us, we have the wrong metadata for it, either in
-        // 	// the MSpan structures or in the garbage collection bitmap.
-        // 	// Using SysFault here means that the program will run out of
-        // 	// memory fairly quickly in efence mode, but at least it won't
-        // 	// have mysterious crashes due to confused memory reuse.
-        // 	// It should be possible to switch back to SysFree if we also
-        // 	// implement and then call some kind of MHeap_DeleteSpan.
-        // 	if debug.efence > 0 {
-        // 		s.limit = 0 // prevent mlookup from finding this span
-        // 		sysFault(unsafe.Pointer(s.base()), size)
-        // 	} else {
-        // 		mheap_.freeSpan(s, 1)
-        // 	}
-        // 	c.local_nlargefree++
-        // 	c.local_largefree += size
-        // 	res = true
-        // }
-        // if !res {
-        // 	// The span has been swept and is still in-use, so put
-        // 	// it on the swept in-use list.
-        // 	mheap_.sweepSpans[sweepgen/2%2].push(s)
-        // }
-        // return res
-        false
+        // Initialize alloc bits cache.
+        self.refill_allocations_cache(0);
+
+        // We need to set s.sweepgen = h.sweepgen only when all blocks are swept,
+        // because of the potential for a concurrent free/SetFinalizer.
+        // But we need to set it before we make the span available for allocation
+        // (return it to heap or mcentral), because allocation code assumes that a
+        // span is already swept if available for allocation.
+        if free_to_heap || number_freed == 0 {
+            // The span must be in our exclusive ownership until we update sweepgen,
+            // check for potential races.
+            if self.state != State::InUse
+                || self.sweep_generation.load(Ordering::Relaxed) != sweep_generation - 1
+            {
+                // print("MSpan_Sweep: state=", s.state, " sweepgen=", s.sweepgen, " mheap.sweepgen=", sweepgen, "\n")
+                panic!("MSpan_Sweep: bad span state after sweep");
+            }
+            // Serialization point.
+            // At this point the mark bits are cleared and allocation ready
+            // to go so release the span.
+            self.sweep_generation
+                .store(sweep_generation, Ordering::Relaxed);
+        }
+
+        if number_freed > 0 && span_class.size_class() != 0 {
+            // TODO c.local_nsmallfree[spc.sizeclass()] += uintptr(nfreed)
+            // result = gc.memory_heap.
+            // res = mheap_.central[spc].mcentral.freeSpan(s, preserve, wasempty)
+            // MCentral_FreeSpan updates sweepgen
+        } else if free_to_heap {
+            // Free large span to heap
+
+            // NOTE(rsc,dvyukov): The original implementation of efence
+            // in CL 22060046 used SysFree instead of SysFault, so that
+            // the operating system would eventually give the memory
+            // back to us again, so that an efence program could run
+            // longer without running out of memory. Unfortunately,
+            // calling SysFree here without any kind of adjustment of the
+            // heap data structures means that when the memory does
+            // come back to us, we have the wrong metadata for it, either in
+            // the MSpan structures or in the garbage collection bitmap.
+            // Using SysFault here means that the program will run out of
+            // memory fairly quickly in efence mode, but at least it won't
+            // have mysterious crashes due to confused memory reuse.
+            // It should be possible to switch back to SysFree if we also
+            // implement and then call some kind of MHeap_DeleteSpan.
+            // TODO: maybe implement efence (https://linux.die.net/man/3/efence) as well?
+            // if debug.efence > 0 {
+            // 	s.limit = 0 // prevent mlookup from finding this span
+            // 	sysFault(unsafe.Pointer(s.base()), size)
+            // } else {
+            let unique_self = unsafe { Unique::new_unchecked(self) };
+            gc.memory_heap.free_span(unique_self, 1);
+            // }
+            // TODO implement accounting
+            // c.local_nlargefree++
+            // c.local_largefree += size
+            result = true;
+        }
+        if !result {
+            // The span has been swept and is still in-use, so put
+            // it on the swept in-use list.
+            let unique_self = unsafe { Unique::new_unchecked(self) };
+            gc.memory_heap
+                .get_pushable_sweep_buffer(sweep_generation)
+                .push(unique_self);
+        }
+        result
     }
 
     // Unlink & free special records for any objects we're about to free.

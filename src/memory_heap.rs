@@ -1,5 +1,15 @@
+use super::memory_span::*;
 use super::sweep_buffer::*;
+use array_init::array_init;
+use cache_line_size::*;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
+
+pub struct MemoryCentral {} // TODO make into file
+impl MemoryCentral {
+    pub fn new() -> MemoryCentral {
+        MemoryCentral {}
+    }
+}
 
 // Main malloc heap.
 // The heap itself is the "free[]" and "large" arrays,
@@ -79,66 +89,60 @@ pub struct MemoryHeap {
     // // progress has already been made.
     // pagesInUse         uint64  // pages of spans in stats _MSpanInUse; R/W with mheap.lock
     pub pages_swept: AtomicUsize, // pages swept this cycle; updated atomically
-                                  // pagesSweptBasis    uint64  // pagesSwept to use as the origin of the sweep ratio; updated atomically
-                                  // sweepHeapLiveBasis uint64  // value of heap_live to use as the origin of sweep ratio; written with lock, read without
-                                  // sweepPagesPerByte  float64 // proportional sweep ratio; written with lock, read without
-                                  // // TODO(austin): pagesInUse should be a uintptr, but the 386
-                                  // // compiler can't 8-byte align fields.
-                                  //
-                                  // // Malloc stats.
-                                  // largealloc  uint64                  // bytes allocated for large objects
-                                  // nlargealloc uint64                  // number of large object allocations
-                                  // largefree   uint64                  // bytes freed for large objects (>maxsmallsize)
-                                  // nlargefree  uint64                  // number of frees for large objects (>maxsmallsize)
-                                  // nsmallfree  [_NumSizeClasses]uint64 // number of frees for small objects (<=maxsmallsize)
-                                  //
-                                  // // range of addresses we might see in the heap
-                                  // bitmap        uintptr // Points to one byte past the end of the bitmap
-                                  // bitmap_mapped uintptr
-                                  //
-                                  // // The arena_* fields indicate the addresses of the Go heap.
-                                  // //
-                                  // // The maximum range of the Go heap is
-                                  // // [arena_start, arena_start+_MaxMem+1).
-                                  // //
-                                  // // The range of the current Go heap is
-                                  // // [arena_start, arena_used). Parts of this range may not be
-                                  // // mapped, but the metadata structures are always mapped for
-                                  // // the full range.
-                                  // arena_start uintptr
-                                  // arena_used  uintptr // Set with setArenaUsed.
-                                  //
-                                  // // The heap is grown using a linear allocator that allocates
-                                  // // from the block [arena_alloc, arena_end). arena_alloc is
-                                  // // often, but *not always* equal to arena_used.
-                                  // arena_alloc uintptr
-                                  // arena_end   uintptr
-                                  //
-                                  // // arena_reserved indicates that the memory [arena_alloc,
-                                  // // arena_end) is reserved (e.g., mapped PROT_NONE). If this is
-                                  // // false, we have to be careful not to clobber existing
-                                  // // mappings here. If this is true, then we own the mapping
-                                  // // here and *must* clobber it to use it.
-                                  // arena_reserved bool
-                                  //
-                                  // _ uint32 // ensure 64-bit alignment
-                                  //
-                                  // // central free lists for small size classes.
-                                  // // the padding makes sure that the MCentrals are
-                                  // // spaced CacheLineSize bytes apart, so that each MCentral.lock
-                                  // // gets its own cache line.
-                                  // // central is indexed by spanClass.
-                                  // central [numSpanClasses]struct {
-                                  // 	mcentral mcentral
-                                  // 	pad      [sys.CacheLineSize - unsafe.Sizeof(mcentral{})%sys.CacheLineSize]byte
-                                  // }
-                                  //
-                                  // spanalloc             fixalloc // allocator for span*
-                                  // cachealloc            fixalloc // allocator for mcache*
-                                  // treapalloc            fixalloc // allocator for treapNodes* used by large objects
-                                  // specialfinalizeralloc fixalloc // allocator for specialfinalizer*
-                                  // specialprofilealloc   fixalloc // allocator for specialprofile*
-                                  // speciallock           mutex    // lock for special record allocators.
+
+    // pagesSweptBasis    uint64  // pagesSwept to use as the origin of the sweep ratio; updated atomically
+    // sweepHeapLiveBasis uint64  // value of heap_live to use as the origin of sweep ratio; written with lock, read without
+    // sweepPagesPerByte  float64 // proportional sweep ratio; written with lock, read without
+    // // TODO(austin): pagesInUse should be a uintptr, but the 386
+    // // compiler can't 8-byte align fields.
+    //
+    // // Malloc stats.
+    // largealloc  uint64                  // bytes allocated for large objects
+    // nlargealloc uint64                  // number of large object allocations
+    // largefree   uint64                  // bytes freed for large objects (>maxsmallsize)
+    // nlargefree  uint64                  // number of frees for large objects (>maxsmallsize)
+    // nsmallfree  [_NumSizeClasses]uint64 // number of frees for small objects (<=maxsmallsize)
+    //
+    // // range of addresses we might see in the heap
+    // bitmap        uintptr // Points to one byte past the end of the bitmap
+    // bitmap_mapped uintptr
+    //
+    // // The arena_* fields indicate the addresses of the Go heap.
+    // //
+    // // The maximum range of the Go heap is
+    // // [arena_start, arena_start+_MaxMem+1).
+    // //
+    // // The range of the current Go heap is
+    // // [arena_start, arena_used). Parts of this range may not be
+    // // mapped, but the metadata structures are always mapped for
+    // // the full range.
+    // arena_start uintptr
+    // arena_used  uintptr // Set with setArenaUsed.
+    //
+    // // The heap is grown using a linear allocator that allocates
+    // // from the block [arena_alloc, arena_end). arena_alloc is
+    // // often, but *not always* equal to arena_used.
+    // arena_alloc uintptr
+    // arena_end   uintptr
+    //
+    // // arena_reserved indicates that the memory [arena_alloc,
+    // // arena_end) is reserved (e.g., mapped PROT_NONE). If this is
+    // // false, we have to be careful not to clobber existing
+    // // mappings here. If this is true, then we own the mapping
+    // // here and *must* clobber it to use it.
+    // arena_reserved bool
+    //
+    // _ uint32 // ensure 64-bit alignment
+    //
+    // central free lists for small size classes.
+    pub central: [CacheAligned<MemoryCentral>; NUM_SPAN_CLASSES.0 as usize],
+    //
+    // spanalloc             fixalloc // allocator for span*
+    // cachealloc            fixalloc // allocator for mcache*
+    // treapalloc            fixalloc // allocator for treapNodes* used by large objects
+    // specialfinalizeralloc fixalloc // allocator for specialfinalizer*
+    // specialprofilealloc   fixalloc // allocator for specialprofile*
+    // speciallock           mutex    // lock for special record allocators.
 }
 
 impl MemoryHeap {
@@ -157,14 +161,46 @@ impl MemoryHeap {
             )
         }
     }
+
+    // Free the span back into the heap.
+    pub fn free_span(&self, span: MemorySpan, account: i32) {
+        // systemstack(func() {
+        // 	mp := getg().m
+        // 	lock(&h.lock)
+        // 	memstats.heap_scan += uint64(mp.mcache.local_scan)
+        // 	mp.mcache.local_scan = 0
+        // 	memstats.tinyallocs += uint64(mp.mcache.local_tinyallocs)
+        // 	mp.mcache.local_tinyallocs = 0
+        // 	if msanenabled {
+        // 		// Tell msan that this entire span is no longer in use.
+        // 		base := unsafe.Pointer(s.base())
+        // 		bytes := s.npages << _PageShift
+        // 		msanfree(base, bytes)
+        // 	}
+        // 	if acct != 0 {
+        // 		memstats.heap_objects--
+        // 	}
+        // 	if gcBlackenEnabled != 0 {
+        // 		// heap_scan changed.
+        // 		gcController.revise()
+        // 	}
+        // 	h.freeSpanLocked(s, true, true, 0)
+        // 	unlock(&h.lock)
+        // })
+    }
 }
 
 pub fn new_memory_heap() -> MemoryHeap {
+    let memory_central: [CacheAligned<MemoryCentral>; NUM_SPAN_CLASSES.0 as usize] =
+        array_init(|i| CacheAligned {
+            0: MemoryCentral::new(),
+        });
     MemoryHeap {
         sweep_done: AtomicBool::new(false),
         sweepers: AtomicUsize::new(0),
         sweep_generation: AtomicUsize::new(0),
         sweep_buffers: [SweepBuffer::new(), SweepBuffer::new()],
         pages_swept: AtomicUsize::new(0),
+        central: memory_central,
     }
 }
