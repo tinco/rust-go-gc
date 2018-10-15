@@ -1,15 +1,9 @@
+use super::memory_central::MemoryCentral;
 use super::memory_span::*;
 use super::sweep_buffer::*;
 use array_init::array_init;
 use cache_line_size::*;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
-
-pub struct MemoryCentral {} // TODO make into file
-impl MemoryCentral {
-    pub fn new() -> MemoryCentral {
-        MemoryCentral {}
-    }
-}
 
 // Main malloc heap.
 // The heap itself is the "free[]" and "large" arrays,

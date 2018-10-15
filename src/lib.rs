@@ -14,6 +14,7 @@
 #![feature(int_to_from_bytes)]
 
 pub mod gc;
+pub mod memory_central;
 pub mod memory_heap;
 pub mod memory_span;
 pub mod size_classes;

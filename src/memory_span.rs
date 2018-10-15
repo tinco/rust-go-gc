@@ -159,7 +159,7 @@ impl MemorySpanData {
     // If preserve=true, don't return it to heap nor relink in MCentral lists;
     // caller takes care of it.
     //TODO go:nowritebarrier
-    pub fn sweep(&mut self, gc: &mut gc::GC, reserve: bool) -> bool {
+    pub fn sweep(&mut self, gc: &mut gc::GC, preserve: bool) -> bool {
         // It's critical that we enter this function with preemption disabled,
         // GC must not start while we are in the middle of this function.
         // Since we're not preempting any Rust code, we don't have to worry about that.
@@ -252,10 +252,18 @@ impl MemorySpanData {
         }
 
         if number_freed > 0 && span_class.size_class() != 0 {
-            // TODO c.local_nsmallfree[spc.sizeclass()] += uintptr(nfreed)
-            // result = gc.memory_heap.
-            // res = mheap_.central[spc].mcentral.freeSpan(s, preserve, wasempty)
-            // MCentral_FreeSpan updates sweepgen
+            // TODO accounting: c.local_nsmallfree[spc.sizeclass()] += uintptr(nfreed)
+            // TODO that we create a pointer with unchecked ownership of self in all of the below
+            // branches, probably means this whole function should take ownership.
+            // Maybe change the signature of this function to convey the transfer of ownership?
+            let unique_self = unsafe { Unique::new_unchecked(self) };
+            result = gc.memory_heap.central[span_class.0 as usize].0.free_span(
+                unique_self,
+                preserve,
+                was_empty,
+            )
+        // res = mheap_.central[spc].mcentral.freeSpan(s, preserve, wasempty)
+        // MCentral_FreeSpan updates sweepgen
         } else if free_to_heap {
             // Free large span to heap
 
