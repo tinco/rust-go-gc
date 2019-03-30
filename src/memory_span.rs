@@ -313,6 +313,7 @@ impl MemorySpanData {
     //    If such object is not marked, we need to queue all finalizers at once.
     // Both 1 and 2 are possible at the same time.
     fn free_specials(&mut self) {
+        unimplemented!();
         // specialp := &s.specials
         // special := *specialp
 

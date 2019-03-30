@@ -6,6 +6,7 @@ use std::sync::Mutex;
 
 use super::memory_heap::*;
 use super::memory_span;
+use super::work::*;
 
 // State of background sweep.
 pub struct BackgroundSweep {
@@ -69,17 +70,28 @@ struct GCBitsArenas {
 // previous *gcBitsArena
 }
 
+#[repr(usize)]
+pub enum GCPhase {
+    Off
+}
+
 pub struct GC {
+    // Garbage collector phase.
+    // Indicates to write barrier and synchronization task to perform.
+    phase: AtomicUsize,
     background_sweep: BackgroundSweep,
     pub memory_heap: MemoryHeap,
     bits_arenas: GCBitsArenas,
+    work: Work,
 }
 
 pub fn new_gc() -> GC {
     GC {
+        phase: AtomicUsize::new(GCPhase::Off as usize),
         background_sweep: new_sweep(),
         memory_heap: new_memory_heap(),
         bits_arenas: GCBitsArenas {},
+        work: Work::new(),
     }
 }
 
@@ -149,25 +161,30 @@ impl GC {
     // true if it should be called again to free more.
     fn free_some_work_buffers(&self, preemptible: bool) -> bool {
         let batch_size = 64; // ~1–2 µs per span.
-                             // lock(&work.wbufSpans.lock)
-                             // if gcphase != _GCoff || work.wbufSpans.free.isEmpty() {
-                             // 	unlock(&work.wbufSpans.lock)
-                             // 	return false
-                             // }
-                             // systemstack(func() {
-                             // 	gp := getg().m.curg
-                             // 	for i := 0; i < batchSize && !(preemptible && gp.preempt); i++ {
-                             // 		span := work.wbufSpans.free.first
-                             // 		if span == nil {
-                             // 			break
-                             // 		}
-                             // 		work.wbufSpans.free.remove(span)
-                             // 		mheap_.freeManual(span, &memstats.gc_sys)
-                             // 	}
-                             // })
-                             // more := !work.wbufSpans.free.isEmpty()
-                             // unlock(&work.wbufSpans.lock)
-                             // return more
+        let work_buffer_spans = self.work.work_buffer_spans.protected.lock().expect("Could not lock work buffer spans");
+
+        if self.phase.load(Ordering::Relaxed) != (GCPhase::Off as usize) || work_buffer_spans.free.is_empty() {
+            return false
+        }
+        // lock(&work.wbufSpans.lock)
+        // if gcphase != _GCoff || work.wbufSpans.free.isEmpty() {
+        // 	unlock(&work.wbufSpans.lock)
+        // 	return false
+        // }
+        // systemstack(func() {
+        // 	gp := getg().m.curg
+        // 	for i := 0; i < batchSize && !(preemptible && gp.preempt); i++ {
+        // 		span := work.wbufSpans.free.first
+        // 		if span == nil {
+        // 			break
+        // 		}
+        // 		work.wbufSpans.free.remove(span)
+        // 		mheap_.freeManual(span, &memstats.gc_sys)
+        // 	}
+        // })
+        // more := !work.wbufSpans.free.isEmpty()
+        // unlock(&work.wbufSpans.lock)
+        // return more
         false
     }
 
