@@ -4,50 +4,52 @@ use super::sweep_buffer::*;
 use array_init::array_init;
 use cache_line_size::*;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::Mutex;
+
+// ProtectedMemoryHeap contains all the fields of MemoryHeap that are protected by the mutex.
+pub struct ProtectedMemoryHeap {
+    // free      [_MaxMHeapList]mSpanList // free lists of given length up to _MaxMHeapList
+    // freelarge mTreap                   // free treap of length >= _MaxMHeapList
+    // busy      [_MaxMHeapList]mSpanList // busy lists of large spans of given length
+    // busylarge mSpanList                // busy lists of large spans length >= _MaxMHeapList
+
+    // allspans is a slice of all mspans ever created. Each mspan
+    // appears exactly once.
+    //
+    // The memory for allspans is manually managed and can be
+    // reallocated and move as the heap grows.
+    //
+    // In general, allspans is protected by mheap_.lock, which
+    // prevents concurrent access as well as freeing the backing
+    // store. Accesses during STW might not hold the lock, but
+    // must ensure that allocation cannot happen around the
+    // access (since that may free the backing store).
+    // allspans []*mspan // all spans out there
+
+    // spans is a lookup table to map virtual address page IDs to *mspan.
+    // For allocated spans, their pages map to the span itself.
+    // For free spans, only the lowest and highest pages map to the span itself.
+    // Internal pages map to an arbitrary span.
+    // For pages that have never been allocated, spans entries are nil.
+    //
+    // This is backed by a reserved region of the address space so
+    // it can grow without moving. The memory up to len(spans) is
+    // mapped. cap(spans) indicates the total reserved memory.
+    // spans []*mspan
+    //
+}
 
 // Main malloc heap.
 // The heap itself is the "free[]" and "large" arrays,
 // but all the other global data is here too.
 //
-// mheap must not be heap-allocated because it contains mSpanLists,
-// which must not be heap-allocated.
-//
-//go:notinheap
 pub struct MemoryHeap {
-    // lock      mutex
-    // free      [_MaxMHeapList]mSpanList // free lists of given length up to _MaxMHeapList
-    // freelarge mTreap                   // free treap of length >= _MaxMHeapList
-    // busy      [_MaxMHeapList]mSpanList // busy lists of large spans of given length
-    // busylarge mSpanList                // busy lists of large spans length >= _MaxMHeapList
+    pub lock: Mutex<ProtectedMemoryHeap>,
     // TODO these should all be u32!
     pub sweep_generation: AtomicUsize, // sweep generation, see comment in mspan, is increased by 2 after every GC
     pub sweep_done: AtomicBool,        // all spans are swept
     pub sweepers: AtomicUsize,         // number of active sweepone calls
-    //
-    // // allspans is a slice of all mspans ever created. Each mspan
-    // // appears exactly once.
-    // //
-    // // The memory for allspans is manually managed and can be
-    // // reallocated and move as the heap grows.
-    // //
-    // // In general, allspans is protected by mheap_.lock, which
-    // // prevents concurrent access as well as freeing the backing
-    // // store. Accesses during STW might not hold the lock, but
-    // // must ensure that allocation cannot happen around the
-    // // access (since that may free the backing store).
-    // allspans []*mspan // all spans out there
-    //
-    // // spans is a lookup table to map virtual address page IDs to *mspan.
-    // // For allocated spans, their pages map to the span itself.
-    // // For free spans, only the lowest and highest pages map to the span itself.
-    // // Internal pages map to an arbitrary span.
-    // // For pages that have never been allocated, spans entries are nil.
-    // //
-    // // This is backed by a reserved region of the address space so
-    // // it can grow without moving. The memory up to len(spans) is
-    // // mapped. cap(spans) indicates the total reserved memory.
-    // spans []*mspan
-    //
+    // _ uint32 // align uint64 fields on 32-bit for atomics
 
     // sweep_buffers contains two mspan stacks: one of swept in-use
     // spans, and one of unswept in-use spans. These two trade
@@ -60,9 +62,6 @@ pub struct MemoryHeap {
     // on the swept stack.
     sweep_buffers: [SweepBuffer; 2],
 
-    //
-    // _ uint32 // align uint64 fields on 32-bit for atomics
-    //
     // // Proportional sweep
     // //
     // // These parameters represent a linear function from heap_live
@@ -160,7 +159,7 @@ impl MemoryHeap {
     pub fn free_span(&self, span: MemorySpan, account: i32) {
         // systemstack(func() {
         // 	mp := getg().m
-        // 	lock(&h.lock)
+        // self.lock()
         // 	memstats.heap_scan += uint64(mp.mcache.local_scan)
         // 	mp.mcache.local_scan = 0
         // 	memstats.tinyallocs += uint64(mp.mcache.local_tinyallocs)
@@ -190,6 +189,7 @@ pub fn new_memory_heap() -> MemoryHeap {
             0: MemoryCentral::new(),
         });
     MemoryHeap {
+        lock: Mutex::new(ProtectedMemoryHeap{}),
         sweep_done: AtomicBool::new(false),
         sweepers: AtomicUsize::new(0),
         sweep_generation: AtomicUsize::new(0),

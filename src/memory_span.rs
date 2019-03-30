@@ -262,7 +262,6 @@ impl MemorySpanData {
                 preserve,
                 was_empty,
             )
-        // res = mheap_.central[spc].mcentral.freeSpan(s, preserve, wasempty)
         // MCentral_FreeSpan updates sweepgen
         } else if free_to_heap {
             // Free large span to heap
