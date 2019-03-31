@@ -8,6 +8,7 @@ pub struct MemorySpanData {
     // next *mspan     // next span in list, or nil if none
     // prev *mspan     // previous span in list, or nil if none
     // list *mSpanList // For debugging. TODO: Remove.
+    pub in_list: bool, // TODO replaces list ^
     //
     // startAddr uintptr // address of first byte of span aka s.base()
     pub number_of_pages: usize, // number of pages in span
@@ -302,6 +303,10 @@ impl MemorySpanData {
                 .push(unique_self);
         }
         result
+    }
+
+    pub fn is_in_list(&self) -> bool {
+        self.in_list
     }
 
     // Unlink & free special records for any objects we're about to free.

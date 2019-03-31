@@ -72,7 +72,7 @@ struct GCBitsArenas {
 
 #[repr(usize)]
 pub enum GCPhase {
-    Off
+    Off,
 }
 
 pub struct GC {
@@ -161,10 +161,17 @@ impl GC {
     // true if it should be called again to free more.
     fn free_some_work_buffers(&self, preemptible: bool) -> bool {
         let batch_size = 64; // ~1–2 µs per span.
-        let work_buffer_spans = self.work.work_buffer_spans.protected.lock().expect("Could not lock work buffer spans");
+        let work_buffer_spans = self
+            .work
+            .work_buffer_spans
+            .protected
+            .lock()
+            .expect("Could not lock work buffer spans");
 
-        if self.phase.load(Ordering::Relaxed) != (GCPhase::Off as usize) || work_buffer_spans.free.is_empty() {
-            return false
+        if self.phase.load(Ordering::Relaxed) != (GCPhase::Off as usize)
+            || work_buffer_spans.free.is_empty()
+        {
+            return false;
         }
 
         // 	gp := getg().m.curg
@@ -177,14 +184,12 @@ impl GC {
                 Some(span) => {
                     // mheap_.freeManual(span, &memstats.gc_sys)
                     self.memory_heap.free_manual_span(span)
-                },
-                None => {
-                    break
                 }
+                None => break,
             }
         }
 
-        return !work_buffer_spans.free.is_empty()
+        return !work_buffer_spans.free.is_empty();
     }
 
     // sweeps one span

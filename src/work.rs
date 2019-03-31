@@ -1,21 +1,21 @@
-use std::sync::Mutex;
 use crate::memory_span_list::MemorySpanList;
+use std::sync::Mutex;
 
 // 	wbufSpans struct {
 pub struct WorkBufferSpansProtected {
-	// free is a list of spans dedicated to workbufs, but
-	// that don't currently contain any workbufs.
-	pub free: MemorySpanList,
-	// busy is a list of all spans containing workbufs on
-	// one of the workbuf lists.
-	pub busy: MemorySpanList,
+    // free is a list of spans dedicated to workbufs, but
+    // that don't currently contain any workbufs.
+    pub free: MemorySpanList,
+    // busy is a list of all spans containing workbufs on
+    // one of the workbuf lists.
+    pub busy: MemorySpanList,
 }
 
 impl WorkBufferSpansProtected {
     pub fn new() -> WorkBufferSpansProtected {
         WorkBufferSpansProtected {
-            free: MemorySpanList{},
-            busy: MemorySpanList{},
+            free: MemorySpanList {},
+            busy: MemorySpanList {},
         }
     }
 }
@@ -27,7 +27,7 @@ pub struct WorkBufferSpans {
 impl WorkBufferSpans {
     pub fn new() -> WorkBufferSpans {
         WorkBufferSpans {
-            protected: Mutex::new(WorkBufferSpansProtected::new())
+            protected: Mutex::new(WorkBufferSpansProtected::new()),
         }
     }
 }
@@ -159,7 +159,7 @@ pub struct Work {
 impl Work {
     pub fn new() -> Work {
         Work {
-            work_buffer_spans: WorkBufferSpans::new()
+            work_buffer_spans: WorkBufferSpans::new(),
         }
     }
 }

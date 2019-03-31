@@ -17,10 +17,10 @@ pub mod gc;
 pub mod memory_central;
 pub mod memory_heap;
 pub mod memory_span;
+pub mod memory_span_list;
 pub mod size_classes;
 pub mod sweep_buffer;
 pub mod work;
-pub mod memory_span_list;
 
 #[test]
 fn it_works() {}

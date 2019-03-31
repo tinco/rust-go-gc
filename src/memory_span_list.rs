@@ -13,4 +13,8 @@ impl MemorySpanList {
     pub fn remove_first(&self) -> Option<MemorySpan> {
         unimplemented!()
     }
+
+    pub fn remove(&mut self, span: MemorySpan) {
+        unimplemented!()
+    }
 }
