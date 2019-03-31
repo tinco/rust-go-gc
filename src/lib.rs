@@ -12,6 +12,7 @@
 #![feature(allocator_api)]
 #![feature(ptr_internals)]
 #![feature(int_to_from_bytes)]
+#![feature(alloc_layout_extra)]
 
 pub mod gc;
 pub mod memory_central;

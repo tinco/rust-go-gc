@@ -1,6 +1,6 @@
+use back_to_the_future::futures_await;
 use futures::stream::Stream;
 use futures::sync::{mpsc, oneshot};
-use futures_future::futures_future;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
@@ -104,9 +104,7 @@ impl GC {
 
         self.background_sweep(signal_setup_done);
 
-        let f = futures_future(&mut setup_done);
-
-        await!(f);
+        futures_await!(&mut setup_done);
     }
 
     async fn background_sweep(&mut self, signal_setup_done: oneshot::Sender<bool>) {
@@ -126,7 +124,7 @@ impl GC {
         };
 
         let mut unpark_future = unpark.into_future();
-        await!(futures_future(&mut unpark_future));
+        futures_await!(&mut unpark_future);
 
         loop {
             // we sweep one and then yield to other goroutines until sweepone returns FFFFFFF
@@ -153,7 +151,7 @@ impl GC {
             }
 
             *sweep_parked = true;
-            await!(futures_future(&mut unpark_future));
+            futures_await!(&mut unpark_future);
         }
     }
 
