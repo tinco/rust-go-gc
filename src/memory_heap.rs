@@ -1,9 +1,10 @@
 use super::memory_central::MemoryCentral;
+use super::memory_span;
 use super::memory_span::*;
 use super::sweep_buffer::*;
 use array_init::array_init;
 use cache_line_size::*;
-use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 // ProtectedMemoryHeap contains all the fields of MemoryHeap that are protected by the mutex.
@@ -37,6 +38,104 @@ pub struct ProtectedMemoryHeap {
     // mapped. cap(spans) indicates the total reserved memory.
     // spans []*mspan
     //
+
+    pub pages_in_use: u64  // pages of spans in stats _MSpanInUse; R/W with mheap.lock
+}
+
+impl ProtectedMemoryHeap {
+    // span must be on a busy list (h.busy or h.busylarge) or unlinked.
+    pub fn free_span(&mut self, memory_heap: &MemoryHeap, mut unique_span: MemorySpan, account_in_use: bool, account_idle: bool, unused_since: i64) {
+        let mut span = unsafe { unique_span.as_mut() };
+
+    	match span.state {
+    	memory_span::State::Manual => {
+    		if span.allocations_count != 0 {
+    			panic!("MHeap_FreeSpanLocked - invalid stack free")
+    		}
+        },
+    	memory_span::State::InUse => {
+    		if span.allocations_count != 0 || span.sweep_generation.load(Ordering::Relaxed) != memory_heap.sweep_generation.load(Ordering::Relaxed) {
+    			// print("MHeap_FreeSpanLocked - span ", s, " ptr ", hex(s.base()), " allocCount ", s.allocCount, " sweepgen ", s.sweepgen, "/", h.sweepgen, "\n")
+    			panic!("MHeap_FreeSpanLocked - invalid free")
+    		}
+    		self.pages_in_use -= span.number_of_pages as u64
+        },
+    	_ => {
+    		panic!("MHeap_FreeSpanLocked - invalid span state")
+    	}
+    }
+
+    // 	if acctinuse {
+    // 		memstats.heap_inuse -= uint64(s.npages << _PageShift)
+    // 	}
+    // 	if acctidle {
+    // 		memstats.heap_idle += uint64(s.npages << _PageShift)
+    // 	}
+
+    // 	s.state = _MSpanFree
+    // 	if s.inList() {
+    // 		h.busyList(s.npages).remove(s)
+    // 	}
+
+    // 	// Stamp newly unused spans. The scavenger will use that
+    // 	// info to potentially give back some pages to the OS.
+    // 	s.unusedsince = unusedsince
+    // 	if unusedsince == 0 {
+    // 		s.unusedsince = nanotime()
+    // 	}
+    // 	s.npreleased = 0
+    //
+    // 	// Coalesce with earlier, later spans.
+    // 	p := (s.base() - h.arena_start) >> _PageShift
+    // 	if p > 0 {
+    // 		before := h.spans[p-1]
+    // 		if before != nil && before.state == _MSpanFree {
+    // 			// Now adjust s.
+    // 			s.startAddr = before.startAddr
+    // 			s.npages += before.npages
+    // 			s.npreleased = before.npreleased // absorb released pages
+    // 			s.needzero |= before.needzero
+    // 			p -= before.npages
+    // 			h.spans[p] = s
+    // 			// The size is potentially changing so the treap needs to delete adjacent nodes and
+    // 			// insert back as a combined node.
+    // 			if h.isLargeSpan(before.npages) {
+    // 				// We have a t, it is large so it has to be in the treap so we can remove it.
+    // 				h.freelarge.removeSpan(before)
+    // 			} else {
+    // 				h.freeList(before.npages).remove(before)
+    // 			}
+    // 			before.state = _MSpanDead
+    // 			h.spanalloc.free(unsafe.Pointer(before))
+    // 		}
+    // 	}
+    //
+    // 	// Now check to see if next (greater addresses) span is free and can be coalesced.
+    // 	if (p + s.npages) < uintptr(len(h.spans)) {
+    // 		after := h.spans[p+s.npages]
+    // 		if after != nil && after.state == _MSpanFree {
+    // 			s.npages += after.npages
+    // 			s.npreleased += after.npreleased
+    // 			s.needzero |= after.needzero
+    // 			h.spans[p+s.npages-1] = s
+    // 			if h.isLargeSpan(after.npages) {
+    // 				h.freelarge.removeSpan(after)
+    // 			} else {
+    // 				h.freeList(after.npages).remove(after)
+    // 			}
+    // 			after.state = _MSpanDead
+    // 			h.spanalloc.free(unsafe.Pointer(after))
+    // 		}
+    // 	}
+    //
+    // 	// Insert s into appropriate list or treap.
+    // 	if h.isLargeSpan(s.npages) {
+    // 		h.freelarge.insert(s)
+    // 	} else {
+    // 		h.freeList(s.npages).insert(s)
+    // 	}
+    // }
+    }
 }
 
 // Main malloc heap.
@@ -44,7 +143,7 @@ pub struct ProtectedMemoryHeap {
 // but all the other global data is here too.
 //
 pub struct MemoryHeap {
-    pub lock: Mutex<ProtectedMemoryHeap>,
+    pub protected: Mutex<ProtectedMemoryHeap>,
     // TODO these should all be u32!
     pub sweep_generation: AtomicUsize, // sweep generation, see comment in mspan, is increased by 2 after every GC
     pub sweep_done: AtomicBool,        // all spans are swept
@@ -80,7 +179,6 @@ pub struct MemoryHeap {
     // // accounting for current progress. If we could only adjust
     // // the slope, it would create a discontinuity in debt if any
     // // progress has already been made.
-    // pagesInUse         uint64  // pages of spans in stats _MSpanInUse; R/W with mheap.lock
     pub pages_swept: AtomicUsize, // pages swept this cycle; updated atomically
 
     // pagesSweptBasis    uint64  // pagesSwept to use as the origin of the sweep ratio; updated atomically
@@ -155,11 +253,30 @@ impl MemoryHeap {
         }
     }
 
+    // freeManual frees a manually-managed span returned by allocManual.
+    // stat must be the same as the stat passed to the allocManual that
+    // allocated s.
+    //
+    // This must only be called when gcphase == _GCoff. See mSpanState for
+    // an explanation.
+    //
+    // freeManual must be called on the system stack to prevent stack
+    // growth, just like allocManual.
+    //
+    //go:systemstack
+    pub fn free_manual_span(&self, mut span: MemorySpan, /*, stat *uint64 */) {
+        unsafe { span.as_mut() }.need_zero = 1;
+
+        let mut protected = self.protected.lock().expect("Could not get memory heap lock");
+        // *stat -= uint64(s.npages << _PageShift)
+        // memstats.heap_sys += uint64(s.npages << _PageShift)
+        protected.free_span(self, span, false, true, 0)
+    }
+
     // Free the span back into the heap.
     pub fn free_span(&self, span: MemorySpan, account: i32) {
-        // systemstack(func() {
-        // 	mp := getg().m
-        // self.lock()
+        let mut protected = self.protected.lock().expect("Could not get memory heap lock");
+
         // 	memstats.heap_scan += uint64(mp.mcache.local_scan)
         // 	mp.mcache.local_scan = 0
         // 	memstats.tinyallocs += uint64(mp.mcache.local_tinyallocs)
@@ -177,9 +294,8 @@ impl MemoryHeap {
         // 		// heap_scan changed.
         // 		gcController.revise()
         // 	}
-        // 	h.freeSpanLocked(s, true, true, 0)
-        // 	unlock(&h.lock)
-        // })
+
+        protected.free_span(self, span, true, true, 0)
     }
 }
 
@@ -189,7 +305,9 @@ pub fn new_memory_heap() -> MemoryHeap {
             0: MemoryCentral::new(),
         });
     MemoryHeap {
-        lock: Mutex::new(ProtectedMemoryHeap{}),
+        protected: Mutex::new(ProtectedMemoryHeap{
+            pages_in_use: 0,
+        }),
         sweep_done: AtomicBool::new(false),
         sweepers: AtomicUsize::new(0),
         sweep_generation: AtomicUsize::new(0),

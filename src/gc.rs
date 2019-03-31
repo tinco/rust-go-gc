@@ -166,26 +166,25 @@ impl GC {
         if self.phase.load(Ordering::Relaxed) != (GCPhase::Off as usize) || work_buffer_spans.free.is_empty() {
             return false
         }
-        // lock(&work.wbufSpans.lock)
-        // if gcphase != _GCoff || work.wbufSpans.free.isEmpty() {
-        // 	unlock(&work.wbufSpans.lock)
-        // 	return false
-        // }
-        // systemstack(func() {
+
         // 	gp := getg().m.curg
-        // 	for i := 0; i < batchSize && !(preemptible && gp.preempt); i++ {
-        // 		span := work.wbufSpans.free.first
-        // 		if span == nil {
-        // 			break
-        // 		}
-        // 		work.wbufSpans.free.remove(span)
-        // 		mheap_.freeManual(span, &memstats.gc_sys)
-        // 	}
-        // })
-        // more := !work.wbufSpans.free.isEmpty()
-        // unlock(&work.wbufSpans.lock)
-        // return more
-        false
+        for _ in 0..batch_size {
+            // TODO do we support preemption?
+            // if (preemptible && gp.preempt) {
+            //     break
+            // }
+            match work_buffer_spans.free.remove_first() {
+                Some(span) => {
+                    // mheap_.freeManual(span, &memstats.gc_sys)
+                    self.memory_heap.free_manual_span(span)
+                },
+                None => {
+                    break
+                }
+            }
+        }
+
+        return !work_buffer_spans.free.is_empty()
     }
 
     // sweeps one span
