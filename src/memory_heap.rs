@@ -8,6 +8,8 @@ use array_init::array_init;
 use cache_line_size::*;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::time::Instant;
+use std::ptr::Unique;
 
 pub const MAX_MEMORY_HEAP_LIST: usize = 1 << (20 - PAGE_SHIFT); // Maximum page length for fixed-size list in MHeap.;
 
@@ -53,7 +55,7 @@ impl ProtectedMemoryHeap {
         mut unique_span: MemorySpan,
         account_in_use: bool,
         account_idle: bool,
-        unused_since: i64,
+        unused_since: Option<Instant>,
     ) {
         let mut span = unsafe { unique_span.as_mut() };
 
@@ -85,17 +87,18 @@ impl ProtectedMemoryHeap {
 
         span.state = memory_span::State::Free;
         if span.is_in_list() {
-            self.busy_list(span.number_of_pages).remove(unique_span)
+            self.busy_list(span.number_of_pages).remove(unsafe { Unique::new_unchecked(span) })
         }
 
-        // 	// Stamp newly unused spans. The scavenger will use that
-        // 	// info to potentially give back some pages to the OS.
-        // 	s.unusedsince = unusedsince
-        // 	if unusedsince == 0 {
-        // 		s.unusedsince = nanotime()
-        // 	}
-        // 	s.npreleased = 0
-        //
+    	// Stamp newly unused spans. The scavenger will use that
+    	// info to potentially give back some pages to the OS.
+        span.unused_since = match unused_since {
+            Some(instant) => instant,
+            None => Instant::now()
+        };
+
+    	span.number_of_pages_released = 0
+
         // 	// Coalesce with earlier, later spans.
         // 	p := (s.base() - h.arena_start) >> _PageShift
         // 	if p > 0 {
@@ -291,7 +294,7 @@ impl MemoryHeap {
             .expect("Could not get memory heap lock");
         // *stat -= uint64(s.npages << _PageShift)
         // memstats.heap_sys += uint64(s.npages << _PageShift)
-        protected.free_span(self, span, false, true, 0)
+        protected.free_span(self, span, false, true, None)
     }
 
     // Free the span back into the heap.
@@ -319,7 +322,7 @@ impl MemoryHeap {
         // 		gcController.revise()
         // 	}
 
-        protected.free_span(self, span, true, true, 0)
+        protected.free_span(self, span, true, true, None)
     }
 }
 

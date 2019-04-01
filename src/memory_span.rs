@@ -1,6 +1,7 @@
 use super::size_classes::*;
 use std::ptr::Unique;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
 
 use super::gc;
 
@@ -86,8 +87,8 @@ pub struct MemorySpanData {
     // divShift    uint8      // for divide by elemsize - divMagic.shift
     // divShift2   uint8      // for divide by elemsize - divMagic.shift2
     pub element_size: usize, // computed from sizeclass or from npages
-                             // unusedsince int64      // first time spotted by gc in mspanfree state
-                             // npreleased  uintptr    // number of pages released to the os
+    pub unused_since: Instant,      // first time spotted by gc in mspanfree state (note: on golang this is i64 instead of 128bit Instant)
+    pub number_of_pages_released:  usize, // number of pages released to the os
                              // limit       uintptr    // end of data in span
                              // speciallock mutex      // guards specials list
                              // specials    *special   // linked list of special records sorted by offset.
