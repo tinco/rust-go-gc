@@ -100,9 +100,7 @@ impl ProtectedMemoryHeap {
     	span.number_of_pages_released = 0;
 
     	// Coalesce with earlier, later spans.
-        let span_base_ptr = unsafe { //TODO can this whole method be less unsafe?
-            std::mem::transmute::<Unique<u8>, usize>(span.base())
-        };
+        let span_base_ptr = span.base().as_ptr() as *const u8 as usize;
     	let p = (span_base_ptr - memory_heap.arena_start.load(Ordering::Relaxed)) >> PAGE_SHIFT;
         // 	if p > 0 {
         // 		before := h.spans[p-1]
