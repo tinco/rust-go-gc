@@ -11,7 +11,7 @@ pub struct MemorySpanData {
     // list *mSpanList // For debugging. TODO: Remove.
     pub in_list: bool, // TODO replaces list ^
     //
-    // startAddr uintptr // address of first byte of span aka s.base()
+    pub start_address: Unique<u8>, // address of first byte of span aka s.base()
     pub number_of_pages: usize, // number of pages in span
     //
     // manualFreeList gclinkptr // list of free objects in _MSpanManual spans
@@ -308,6 +308,10 @@ impl MemorySpanData {
 
     pub fn is_in_list(&self) -> bool {
         self.in_list
+    }
+
+    pub fn base(&self) -> Unique<u8> {
+        return self.start_address
     }
 
     // Unlink & free special records for any objects we're about to free.

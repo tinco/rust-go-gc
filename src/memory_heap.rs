@@ -97,10 +97,13 @@ impl ProtectedMemoryHeap {
             None => Instant::now()
         };
 
-    	span.number_of_pages_released = 0
+    	span.number_of_pages_released = 0;
 
-        // 	// Coalesce with earlier, later spans.
-        // 	p := (s.base() - h.arena_start) >> _PageShift
+    	// Coalesce with earlier, later spans.
+        let span_base_ptr = unsafe { //TODO can this whole method be less unsafe?
+            std::mem::transmute::<Unique<u8>, usize>(span.base())
+        };
+    	let p = (span_base_ptr - memory_heap.arena_start.load(Ordering::Relaxed)) >> PAGE_SHIFT;
         // 	if p > 0 {
         // 		before := h.spans[p-1]
         // 		if before != nil && before.state == _MSpanFree {
@@ -228,8 +231,8 @@ pub struct MemoryHeap {
     // // [arena_start, arena_used). Parts of this range may not be
     // // mapped, but the metadata structures are always mapped for
     // // the full range.
-    // arena_start uintptr
-    // arena_used  uintptr // Set with setArenaUsed.
+    pub arena_start: AtomicUsize,
+    pub arena_used: AtomicUsize, // Set with setArenaUsed.
     //
     // // The heap is grown using a linear allocator that allocates
     // // from the block [arena_alloc, arena_end). arena_alloc is
@@ -340,6 +343,8 @@ pub fn new_memory_heap() -> MemoryHeap {
             busy: busy_span_lists,
             busy_large: MemorySpanList::new(),
         }),
+        arena_start: AtomicUsize::new(0),
+        arena_used: AtomicUsize::new(0),
         sweep_done: AtomicBool::new(false),
         sweepers: AtomicUsize::new(0),
         sweep_generation: AtomicUsize::new(0),
