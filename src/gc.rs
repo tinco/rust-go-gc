@@ -80,7 +80,7 @@ pub struct GC {
     // Indicates to write barrier and synchronization task to perform.
     phase: AtomicUsize,
     background_sweep: BackgroundSweep,
-    pub memory_heap: MemoryHeap,
+    pub memory_heap: Box<MemoryHeap>,
     bits_arenas: GCBitsArenas,
     work: Work,
 }
@@ -89,7 +89,7 @@ pub fn new_gc() -> GC {
     GC {
         phase: AtomicUsize::new(GCPhase::Off as usize),
         background_sweep: new_sweep(),
-        memory_heap: new_memory_heap(),
+        memory_heap: MemoryHeap::new(),
         bits_arenas: GCBitsArenas {},
         work: Work::new(),
     }
@@ -157,7 +157,7 @@ impl GC {
 
     // freeSomeWbufs frees some workbufs back to the heap and returns
     // true if it should be called again to free more.
-    fn free_some_work_buffers(&self, preemptible: bool) -> bool {
+    fn free_some_work_buffers(&mut self, preemptible: bool) -> bool {
         let batch_size = 64; // ~1–2 µs per span.
         let work_buffer_spans = self
             .work
@@ -181,7 +181,8 @@ impl GC {
             match work_buffer_spans.free.remove_first() {
                 Some(span) => {
                     // mheap_.freeManual(span, &memstats.gc_sys)
-                    self.memory_heap.free_manual_span(span)
+                    let memory_heap : &mut MemoryHeap = self.memory_heap.as_mut();
+                    memory_heap.free_manual_span(span)
                 }
                 None => break,
             }

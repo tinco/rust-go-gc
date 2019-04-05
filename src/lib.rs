@@ -6,12 +6,10 @@
 #![feature(async_await)]
 #![feature(futures_api)]
 #![feature(await_macro)]
-#![feature(pin)]
 #![feature(arbitrary_self_types)]
 #![feature(generators)]
 #![feature(allocator_api)]
 #![feature(ptr_internals)]
-#![feature(int_to_from_bytes)]
 #![feature(alloc_layout_extra)]
 
 pub mod gc;
