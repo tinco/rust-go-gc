@@ -4,6 +4,7 @@ use super::memory_span::*;
 use super::memory_span_list::*;
 use super::size_classes::*;
 use super::sweep_buffer::*;
+use super::static_vec::*;
 use array_init::array_init;
 use cache_line_size::*;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -43,7 +44,7 @@ pub struct ProtectedMemoryHeap {
     // This is backed by a reserved region of the address space so
     // it can grow without moving. The memory up to len(spans) is
     // mapped. cap(spans) indicates the total reserved memory.
-    // pub spans: []*mspan
+    pub spans: StaticVec<MemorySpan>,
     //
     pub pages_in_use: u64, // pages of spans in stats _MSpanInUse; R/W with mheap.lock
 }
@@ -229,6 +230,7 @@ impl MemoryHeap {
                 pages_in_use: 0,
                 busy: busy_span_lists,
                 busy_large: MemorySpanList::new(),
+                spans: StaticVec::new().expect("Could not allocate MemoryHeap spans"),
             },
             arena_start: AtomicUsize::new(0),
             arena_used: AtomicUsize::new(0),

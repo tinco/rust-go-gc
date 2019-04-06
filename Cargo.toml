@@ -12,3 +12,7 @@ array-init = "0"
 [dependencies.back-to-the-future]
 git = "https://github.com/tinco/back-to-the-future"
 branch = "no_local_waker"
+
+[dependencies.memmap]
+git = "https://github.com/tinco/memmap-rs"
+branch = "mmap_with_address"

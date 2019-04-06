@@ -19,6 +19,7 @@ pub mod memory_span;
 pub mod memory_span_list;
 pub mod size_classes;
 pub mod sweep_buffer;
+pub mod static_vec;
 pub mod work;
 
 #[test]
