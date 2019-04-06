@@ -21,6 +21,7 @@ pub mod size_classes;
 pub mod sweep_buffer;
 pub mod static_vec;
 pub mod work;
+pub mod memory_allocator;
 
 #[test]
 fn it_works() {}

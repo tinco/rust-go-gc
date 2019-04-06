@@ -230,7 +230,7 @@ impl MemoryHeap {
                 pages_in_use: 0,
                 busy: busy_span_lists,
                 busy_large: MemorySpanList::new(),
-                spans: StaticVec::new().expect("Could not allocate MemoryHeap spans"),
+                spans: StaticVec::new(0).expect("Could not allocate MemoryHeap spans"),
             },
             arena_start: AtomicUsize::new(0),
             arena_used: AtomicUsize::new(0),
