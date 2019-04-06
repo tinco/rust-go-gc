@@ -6,6 +6,37 @@ use super::memory_allocator::*;
 ///
 /// Never is reallocated, grows contiguously in multitudes of memory pages.
 ///
+
+// linearAlloc is a simple linear allocator that pre-reserves a region
+// of memory and then maps that region as needed. The caller is
+// responsible for locking.
+// type linearAlloc struct {
+// 	next   uintptr // next free byte
+// 	mapped uintptr // one byte past end of mapped space
+// 	end    uintptr // end of reserved space
+// }
+//
+// func (l *linearAlloc) init(base, size uintptr) {
+// 	l.next, l.mapped = base, base
+// 	l.end = base + size
+// }
+//
+// func (l *linearAlloc) alloc(size, align uintptr, sysStat *uint64) unsafe.Pointer {
+// 	p := round(l.next, align)
+// 	if p+size > l.end {
+// 		return nil
+// 	}
+// 	l.next = p + size
+// 	if pEnd := round(l.next-1, physPageSize); pEnd > l.mapped {
+// 		// We need to map more of the reserved space.
+// 		sysMap(unsafe.Pointer(l.mapped), pEnd-l.mapped, sysStat)
+// 		l.mapped = pEnd
+// 	}
+// 	return unsafe.Pointer(p)
+// }
+
+
+
 pub struct StaticVec<T> {
     buffer: MmapMut,
     capacity: usize,

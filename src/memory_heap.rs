@@ -281,6 +281,11 @@ impl LockedMemoryHeap {
                     panic!("MHeap_FreeSpanLocked - invalid free")
                 }
                 self.0.protected.pages_in_use -= span.number_of_pages as u64
+
+                // Clear in-use bit in arena page bitmap.
+                // TODO
+                // arena, pageIdx, pageMask := pageIndexOf(s.base())
+                // arena.pageInUse[pageIdx] &^= pageMask
             }
             _ => panic!("MHeap_FreeSpanLocked - invalid span state"),
         }
@@ -293,9 +298,6 @@ impl LockedMemoryHeap {
         // 	}
 
         span.state = memory_span::State::Free;
-        if span.is_in_list() {
-            self.busy_list(span.number_of_pages).remove(unsafe { Unique::new_unchecked(span) })
-        }
 
         // Stamp newly unused spans. The scavenger will use that
         // info to potentially give back some pages to the OS.
@@ -304,71 +306,135 @@ impl LockedMemoryHeap {
             None => Instant::now()
         };
 
-        span.number_of_pages_released = 0;
+        // Coalesce span with neighbors.
+        self.coalesce(span)
 
-        // Coalesce with earlier, later spans.
-        let span_base_ptr = span.base().as_ptr() as *const u8 as usize;
-        let p = (span_base_ptr - self.0.arena_start.load(Ordering::Relaxed)) >> PAGE_SHIFT;
-        // if p > 0 {
-        //     let before = self.spans[p - 1];
-        // }
-        // 	if p > 0 {
-        // 		before := h.spans[p-1]
-        // 		if before != nil && before.state == _MSpanFree {
-        // 			// Now adjust s.
-        // 			s.startAddr = before.startAddr
-        // 			s.npages += before.npages
-        // 			s.npreleased = before.npreleased // absorb released pages
-        // 			s.needzero |= before.needzero
-        // 			p -= before.npages
-        // 			h.spans[p] = s
-        // 			// The size is potentially changing so the treap needs to delete adjacent nodes and
-        // 			// insert back as a combined node.
-        // 			if h.isLargeSpan(before.npages) {
-        // 				// We have a t, it is large so it has to be in the treap so we can remove it.
-        // 				h.freelarge.removeSpan(before)
-        // 			} else {
-        // 				h.freeList(before.npages).remove(before)
-        // 			}
-        // 			before.state = _MSpanDead
-        // 			h.spanalloc.free(unsafe.Pointer(before))
-        // 		}
-        // 	}
-        //
-        // 	// Now check to see if next (greater addresses) span is free and can be coalesced.
-        // 	if (p + s.npages) < uintptr(len(h.spans)) {
-        // 		after := h.spans[p+s.npages]
-        // 		if after != nil && after.state == _MSpanFree {
-        // 			s.npages += after.npages
-        // 			s.npreleased += after.npreleased
-        // 			s.needzero |= after.needzero
-        // 			h.spans[p+s.npages-1] = s
-        // 			if h.isLargeSpan(after.npages) {
-        // 				h.freelarge.removeSpan(after)
-        // 			} else {
-        // 				h.freeList(after.npages).remove(after)
-        // 			}
-        // 			after.state = _MSpanDead
-        // 			h.spanalloc.free(unsafe.Pointer(after))
-        // 		}
-        // 	}
-        //
-        // 	// Insert s into appropriate list or treap.
-        // 	if h.isLargeSpan(s.npages) {
-        // 		h.freelarge.insert(s)
-        // 	} else {
-        // 		h.freeList(s.npages).insert(s)
-        // 	}
+        // Insert s into the appropriate treap.
+        // if span.scavenged {
+        //     self.scav.insert(s)
+        // } else {
+        //     self.free.insert(s)
         // }
     }
 
-    pub fn busy_list(&mut self, number_of_pages: usize) -> &mut MemorySpanList {
-        let protected = &mut self.0.protected;
-        if number_of_pages < protected.busy.len() {
-            return &mut protected.busy[number_of_pages];
-        }
-        return &mut protected.busy_large;
+    pub fn coalesce(&mut self, span: &mut MemorySpanData) {
+        // We scavenge s at the end after coalescing if s or anything
+    	// it merged with is marked scavenged.
+    	let needs_scavenge = false;
+    	let prescavenged = span.released(); // number of bytes already scavenged.
+        //
+    	// // merge is a helper which merges other into s, deletes references to other
+    	// // in heap metadata, and then discards it. other must be adjacent to s.
+    	// merge := func(other *mspan) {
+    	// 	// Adjust s via base and npages and also in heap metadata.
+    	// 	s.npages += other.npages
+    	// 	s.needzero |= other.needzero
+    	// 	if other.startAddr < s.startAddr {
+    	// 		s.startAddr = other.startAddr
+    	// 		h.setSpan(s.base(), s)
+    	// 	} else {
+    	// 		h.setSpan(s.base()+s.npages*pageSize-1, s)
+    	// 	}
+        //
+    	// 	// If before or s are scavenged, then we need to scavenge the final coalesced span.
+    	// 	needsScavenge = needsScavenge || other.scavenged || s.scavenged
+    	// 	prescavenged += other.released()
+        //
+    	// 	// The size is potentially changing so the treap needs to delete adjacent nodes and
+    	// 	// insert back as a combined node.
+    	// 	if other.scavenged {
+    	// 		h.scav.removeSpan(other)
+    	// 	} else {
+    	// 		h.free.removeSpan(other)
+    	// 	}
+    	// 	other.state = mSpanDead
+    	// 	h.spanalloc.free(unsafe.Pointer(other))
+    	// }
+        //
+    	// // realign is a helper which shrinks other and grows s such that their
+    	// // boundary is on a physical page boundary.
+    	// realign := func(a, b, other *mspan) {
+    	// 	// Caller must ensure a.startAddr < b.startAddr and that either a or
+    	// 	// b is s. a and b must be adjacent. other is whichever of the two is
+    	// 	// not s.
+        //
+    	// 	// If pageSize <= physPageSize then spans are always aligned
+    	// 	// to physical page boundaries, so just exit.
+    	// 	if pageSize <= physPageSize {
+    	// 		return
+    	// 	}
+    	// 	// Since we're resizing other, we must remove it from the treap.
+    	// 	if other.scavenged {
+    	// 		h.scav.removeSpan(other)
+    	// 	} else {
+    	// 		h.free.removeSpan(other)
+    	// 	}
+    	// 	// Round boundary to the nearest physical page size, toward the
+    	// 	// scavenged span.
+    	// 	boundary := b.startAddr
+    	// 	if a.scavenged {
+    	// 		boundary &^= (physPageSize - 1)
+    	// 	} else {
+    	// 		boundary = (boundary + physPageSize - 1) &^ (physPageSize - 1)
+    	// 	}
+    	// 	a.npages = (boundary - a.startAddr) / pageSize
+    	// 	b.npages = (b.startAddr + b.npages*pageSize - boundary) / pageSize
+    	// 	b.startAddr = boundary
+        //
+    	// 	h.setSpan(boundary-1, a)
+    	// 	h.setSpan(boundary, b)
+        //
+    	// 	// Re-insert other now that it has a new size.
+    	// 	if other.scavenged {
+    	// 		h.scav.insert(other)
+    	// 	} else {
+    	// 		h.free.insert(other)
+    	// 	}
+    	// }
+        //
+    	// // Coalesce with earlier, later spans.
+    	// if before := spanOf(s.base() - 1); before != nil && before.state == mSpanFree {
+    	// 	if s.scavenged == before.scavenged {
+    	// 		merge(before)
+    	// 	} else {
+    	// 		realign(before, s, before)
+    	// 	}
+    	// }
+        //
+    	// // Now check to see if next (greater addresses) span is free and can be coalesced.
+    	// if after := spanOf(s.base() + s.npages*pageSize); after != nil && after.state == mSpanFree {
+    	// 	if s.scavenged == after.scavenged {
+    	// 		merge(after)
+    	// 	} else {
+    	// 		realign(s, after, after)
+    	// 	}
+    	// }
+        //
+    	// if needsScavenge {
+    	// 	// When coalescing spans, some physical pages which
+    	// 	// were not returned to the OS previously because
+    	// 	// they were only partially covered by the span suddenly
+    	// 	// become available for scavenging. We want to make sure
+    	// 	// those holes are filled in, and the span is properly
+    	// 	// scavenged. Rather than trying to detect those holes
+    	// 	// directly, we collect how many bytes were already
+    	// 	// scavenged above and subtract that from heap_released
+    	// 	// before re-scavenging the entire newly-coalesced span,
+    	// 	// which will implicitly bump up heap_released.
+    	// 	memstats.heap_released -= uint64(prescavenged)
+    	// 	s.scavenge()
+    	// }
+
     }
+
+    // TODO I think this got removed in the Go codebase
+    // pub fn busy_list(&mut self, number_of_pages: usize) -> &mut MemorySpanList {
+    //     let protected = &mut self.0.protected;
+    //     if number_of_pages < protected.busy.len() {
+    //         return &mut protected.busy[number_of_pages];
+    //     }
+    //     return &mut protected.busy_large;
+    // }
 }
 
 pub struct LockedMemoryHeapGuard<'a>(pub MutexGuard<'a, Unique<LockedMemoryHeap>>);
