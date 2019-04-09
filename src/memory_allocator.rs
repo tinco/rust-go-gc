@@ -191,6 +191,16 @@ pub const HEAP_ARENA_BITMAP_BYTES : usize = HEAP_ARENA_BYTES / (POINTER_SIZE * 8
 
 pub const PAGES_PER_ARENA : usize = HEAP_ARENA_BYTES / PAGE_SIZE;
 
+// arenaBaseOffset is the pointer value that corresponds to
+// index 0 in the heap arena map.
+//
+// On amd64, the address space is 48 bits, sign extended to 64
+// bits. This offset lets us handle "negative" addresses (or
+// high addresses if viewed as unsigned).
+//
+// On other platforms, the user address space is contiguous
+// and starts at 0, so no offset is necessary.
+pub const ARENA_BASE_OFFSET: usize = 0; // sys.GoarchAmd64 * (1 << 47);
 
 
 // )

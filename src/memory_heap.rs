@@ -434,7 +434,7 @@ impl LockedMemoryHeap {
 
     // setSpan modifies the span map so spanOf(base) is s.
     fn set_span(&mut self, base: *mut u8, span: *mut MemorySpanData) {
-    	// ai := arenaIndex(base)
+    	let arena_index = arena_index(base as usize);
     	// h.arenas[ai.l1()][ai.l2()].spans[(base/pageSize)%pagesPerArena] = s
     }
 
@@ -448,6 +448,24 @@ impl LockedMemoryHeap {
     //     return &mut protected.busy_large;
     // }
 }
+
+// arenaIndex returns the index into mheap_.arenas of the arena
+// containing metadata for p. This index combines of an index into the
+// L1 map and an index into the L2 map and should be used as
+// mheap_.arenas[ai.l1()][ai.l2()].
+//
+// If p is outside the range of valid heap addresses, either l1() or
+// l2() will be out of bounds.
+//
+// It is nosplit because it's called by spanOf and several other
+// nosplit functions.
+//
+//go:nosplit
+pub fn arena_index(p: usize) -> ArenaIndex {
+	((p + ARENA_BASE_OFFSET) / HEAP_ARENA_BYTES) as ArenaIndex
+}
+
+type ArenaIndex = usize;
 
 pub struct LockedMemoryHeapGuard<'a>(pub MutexGuard<'a, Unique<LockedMemoryHeap>>);
 impl<'a> LockedMemoryHeapGuard<'a> {
