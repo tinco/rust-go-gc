@@ -192,11 +192,24 @@ pub const HEAP_ARENA_BYTES: usize = 1 << LOG_HEAP_ARENA_BYTES;
 // logHeapArenaBytes is log_2 of heapArenaBytes. For clarity,
 // prefer using heapArenaBytes where possible (we need the
 // constant to compute some other constants).
-pub const LOG_HEAP_ARENA_BYTES: usize =
-    (6+20)*((IS_64_BIT as usize) *(1-(OS_IS_WINDOWS as usize))*(1-OS_IS_AIX as usize)) +
-    (2+20)*((IS_64_BIT as usize) * (OS_IS_WINDOWS as usize)) +
-    (2+20)*(1-(IS_64_BIT as usize)) +
-    (8+20)*(OS_IS_AIX as usize);
+
+// pub const LOG_HEAP_ARENA_BYTES: usize =
+//     (6+20)*((IS_64_BIT as usize) * (1-(OS_IS_WINDOWS as usize))*(1-OS_IS_AIX as usize)) +
+//     (2+20)*((IS_64_BIT as usize) * (OS_IS_WINDOWS as usize)) +
+//     (2+20)*(1-(IS_64_BIT as usize)) +
+//     (8+20)*(OS_IS_AIX as usize);
+
+#[cfg(all(target_pointer_width = "64", target_os = "windows"))]
+pub const LOG_HEAP_ARENA_BYTES: usize = 2+20;
+
+#[cfg(all(target_pointer_width = "64", target_os = "aix"))]
+pub const LOG_HEAP_ARENA_BYTES: usize = 8+20;
+
+#[cfg(all(target_pointer_width = "64", not(all(target_os = "aix", target_os = "windows"))))]
+pub const LOG_HEAP_ARENA_BYTES: usize = 6+20;
+
+#[cfg(target_pointer_width = "32")]
+pub const LOG_HEAP_ARENA_BYTES: usize = 0;
 
 // heapArenaBitmapBytes is the size of each heap arena's bitmap.
 pub const HEAP_ARENA_BITMAP_BYTES: usize = HEAP_ARENA_BYTES / (POINTER_SIZE * 8 / 2);
