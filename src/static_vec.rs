@@ -1,7 +1,7 @@
-use memmap::{MmapOptions, MmapMut};
+use super::memory_allocator::*;
+use memmap::{MmapMut, MmapOptions};
 use std::io::Error;
 use std::marker::PhantomData;
-use super::memory_allocator::*;
 
 ///
 /// Never is reallocated, grows contiguously in multitudes of memory pages.
@@ -35,8 +35,6 @@ use super::memory_allocator::*;
 // 	return unsafe.Pointer(p)
 // }
 
-
-
 pub struct StaticVec<T> {
     buffer: MmapMut,
     capacity: usize,
@@ -56,7 +54,7 @@ impl<T> StaticVec<T> {
                 capacity: 0,
                 phantom: PhantomData,
             }),
-            Err(e) => Err(e)
+            Err(e) => Err(e),
         }
     }
 }

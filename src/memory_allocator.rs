@@ -99,7 +99,7 @@ pub const POINTER_SIZE: usize = std::mem::size_of::<&u8>();
 //
 // 	concurrentSweep = _ConcurrentSweep
 //
-pub const PAGE_SIZE : usize = 1 << PAGE_SHIFT;
+pub const PAGE_SIZE: usize = 1 << PAGE_SHIFT;
 // 	_PageMask = _PageSize - 1
 //
 // 	// _64bit = 1 on 64-bit systems, 0 on 32-bit systems
@@ -175,21 +175,21 @@ pub const PAGE_SIZE : usize = 1 << PAGE_SHIFT;
 // since it significantly amplifies the cost of committed
 // memory.
 
-pub const HEAP_ARENA_BYTES : usize = 1 << LOG_HEAP_ARENA_BYTES;
+pub const HEAP_ARENA_BYTES: usize = 1 << LOG_HEAP_ARENA_BYTES;
 
 // logHeapArenaBytes is log_2 of heapArenaBytes. For clarity,
 // prefer using heapArenaBytes where possible (we need the
 // constant to compute some other constants).
-pub const LOG_HEAP_ARENA_BYTES : usize = 0;
-    // (6+20)*(_64bit*(1-sys.GoosWindows)*(1-sys.GoosAix)) +
-    // (2+20)*(_64bit*sys.GoosWindows) +
-    // (2+20)*(1-_64bit) +
-    // (8+20)*sys.GoosAix
+pub const LOG_HEAP_ARENA_BYTES: usize = 0;
+// (6+20)*(_64bit*(1-sys.GoosWindows)*(1-sys.GoosAix)) +
+// (2+20)*(_64bit*sys.GoosWindows) +
+// (2+20)*(1-_64bit) +
+// (8+20)*sys.GoosAix
 
 // heapArenaBitmapBytes is the size of each heap arena's bitmap.
-pub const HEAP_ARENA_BITMAP_BYTES : usize = HEAP_ARENA_BYTES / (POINTER_SIZE * 8 / 2);
+pub const HEAP_ARENA_BITMAP_BYTES: usize = HEAP_ARENA_BYTES / (POINTER_SIZE * 8 / 2);
 
-pub const PAGES_PER_ARENA : usize = HEAP_ARENA_BYTES / PAGE_SIZE;
+pub const PAGES_PER_ARENA: usize = HEAP_ARENA_BYTES / PAGE_SIZE;
 
 // arenaBaseOffset is the pointer value that corresponds to
 // index 0 in the heap arena map.
@@ -201,6 +201,5 @@ pub const PAGES_PER_ARENA : usize = HEAP_ARENA_BYTES / PAGE_SIZE;
 // On other platforms, the user address space is contiguous
 // and starts at 0, so no offset is necessary.
 pub const ARENA_BASE_OFFSET: usize = 0; // sys.GoarchAmd64 * (1 << 47);
-
 
 // )

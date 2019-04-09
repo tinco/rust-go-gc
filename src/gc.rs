@@ -181,7 +181,7 @@ impl GC {
             match work_buffer_spans.free.remove_first() {
                 Some(span) => {
                     // mheap_.freeManual(span, &memstats.gc_sys)
-                    let memory_heap : &mut MemoryHeap = self.memory_heap.as_mut();
+                    let memory_heap: &mut MemoryHeap = self.memory_heap.as_mut();
                     memory_heap.free_manual_span(span)
                 }
                 None => break,

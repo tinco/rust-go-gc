@@ -1,9 +1,9 @@
-use super::size_classes::*;
 use super::memory_allocator::*;
+use super::size_classes::*;
+use page_size;
 use std::ptr::Unique;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
-use page_size;
 
 use super::gc;
 
@@ -14,7 +14,7 @@ pub struct MemorySpanData {
     pub in_list: bool, // TODO replaces list ^
     //
     pub start_address: Unique<u8>, // address of first byte of span aka s.base()
-    pub number_of_pages: usize, // number of pages in span
+    pub number_of_pages: usize,    // number of pages in span
     //
     // manualFreeList gclinkptr // list of free objects in _MSpanManual spans
     //
@@ -88,14 +88,14 @@ pub struct MemorySpanData {
     pub need_zero: u8, // needs to be zeroed before allocation
     // divShift    uint8      // for divide by elemsize - divMagic.shift
     // divShift2   uint8      // for divide by elemsize - divMagic.shift2
-    pub element_size: usize, // computed from sizeclass or from npages
-    pub unused_since: Instant,      // first time spotted by gc in mspanfree state (note: on golang this is i64 instead of 128bit Instant)
-    pub number_of_pages_released:  usize, // number of pages released to the os
-    pub scavenged: bool       // whether this span has had its pages released to the OS
+    pub element_size: usize,   // computed from sizeclass or from npages
+    pub unused_since: Instant, // first time spotted by gc in mspanfree state (note: on golang this is i64 instead of 128bit Instant)
+    pub number_of_pages_released: usize, // number of pages released to the os
+    pub scavenged: bool,       // whether this span has had its pages released to the OS
 
-                             // limit       uintptr    // end of data in span
-                             // speciallock mutex      // guards specials list
-                             // specials    *special   // linked list of special records sorted by offset.
+                               // limit       uintptr    // end of data in span
+                               // speciallock mutex      // guards specials list
+                               // specials    *special   // linked list of special records sorted by offset.
 }
 
 pub type MemorySpan = Unique<MemorySpanData>;
@@ -315,7 +315,7 @@ impl MemorySpanData {
     }
 
     pub fn base(&self) -> Unique<u8> {
-        return self.start_address
+        return self.start_address;
     }
 
     // Unlink & free special records for any objects we're about to free.
@@ -492,26 +492,24 @@ impl MemorySpanData {
     // released returns the number of bytes in this span
     // which were returned back to the OS.
     pub fn released(&mut self) -> usize {
-    	if !self.scavenged {
-    		return 0;
-    	}
-    	let (start, end) = self.physical_page_bounds();
-    	return end - start
+        if !self.scavenged {
+            return 0;
+        }
+        let (start, end) = self.physical_page_bounds();
+        return end - start;
     }
 
     // physPageBounds returns the start and end of the span
     // rounded in to the physical page size.
     fn physical_page_bounds(&mut self) -> (usize, usize) {
-    	let mut start = self.base().as_ptr() as usize;
+        let mut start = self.base().as_ptr() as usize;
         let mut end = start + self.number_of_pages << PAGE_SHIFT;
         let physical_page_size = page_size::get();
-    	if physical_page_size > PAGE_SIZE {
-    		// Round start and end in.
+        if physical_page_size > PAGE_SIZE {
+            // Round start and end in.
             start = (start + physical_page_size - 1) & !(physical_page_size - 1);
-    		end &= !(physical_page_size - 1);
-    	}
-    	return (start, end)
+            end &= !(physical_page_size - 1);
+        }
+        return (start, end);
     }
-
-
 }
