@@ -1,6 +1,18 @@
 use super::size_classes::*;
 
 pub const POINTER_SIZE: usize = std::mem::size_of::<&u8>();
+pub const IS_64_BIT: bool = POINTER_SIZE == 8;
+
+#[cfg(target_os = "windows")]
+pub const OS_IS_WINDOWS: bool = true;
+#[cfg(not(target_os = "windows"))]
+pub const OS_IS_WINDOWS: bool = false;
+
+#[cfg(target_os = "aix")]
+pub const OS_IS_AIX: bool = true;
+#[cfg(not(target_os = "aix"))]
+pub const OS_IS_AIX: bool = false;
+
 // Copyright 2014 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
@@ -180,11 +192,11 @@ pub const HEAP_ARENA_BYTES: usize = 1 << LOG_HEAP_ARENA_BYTES;
 // logHeapArenaBytes is log_2 of heapArenaBytes. For clarity,
 // prefer using heapArenaBytes where possible (we need the
 // constant to compute some other constants).
-pub const LOG_HEAP_ARENA_BYTES: usize = 0;
-// (6+20)*(_64bit*(1-sys.GoosWindows)*(1-sys.GoosAix)) +
-// (2+20)*(_64bit*sys.GoosWindows) +
-// (2+20)*(1-_64bit) +
-// (8+20)*sys.GoosAix
+pub const LOG_HEAP_ARENA_BYTES: usize =
+    (6+20)*((IS_64_BIT as usize) *(1-(OS_IS_WINDOWS as usize))*(1-OS_IS_AIX as usize)) +
+    (2+20)*((IS_64_BIT as usize) * (OS_IS_WINDOWS as usize)) +
+    (2+20)*(1-(IS_64_BIT as usize)) +
+    (8+20)*(OS_IS_AIX as usize);
 
 // heapArenaBitmapBytes is the size of each heap arena's bitmap.
 pub const HEAP_ARENA_BITMAP_BYTES: usize = HEAP_ARENA_BYTES / (POINTER_SIZE * 8 / 2);
