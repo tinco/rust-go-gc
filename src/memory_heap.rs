@@ -2,6 +2,7 @@ use super::memory_central::MemoryCentral;
 use super::memory_span;
 use super::memory_span::*;
 use super::memory_span_list::*;
+use crate::memory_allocator::*;
 use super::size_classes::*;
 use super::sweep_buffer::*;
 use super::static_vec::*;
@@ -322,19 +323,22 @@ impl LockedMemoryHeap {
     	// it merged with is marked scavenged.
     	let needs_scavenge = false;
     	let prescavenged = span.released(); // number of bytes already scavenged.
-        //
-    	// // merge is a helper which merges other into s, deletes references to other
-    	// // in heap metadata, and then discards it. other must be adjacent to s.
-    	// merge := func(other *mspan) {
-    	// 	// Adjust s via base and npages and also in heap metadata.
-    	// 	s.npages += other.npages
-    	// 	s.needzero |= other.needzero
-    	// 	if other.startAddr < s.startAddr {
-    	// 		s.startAddr = other.startAddr
-    	// 		h.setSpan(s.base(), s)
-    	// 	} else {
-    	// 		h.setSpan(s.base()+s.npages*pageSize-1, s)
-    	// 	}
+
+    	// merge is a helper which merges other into s, deletes references to other
+    	// in heap metadata, and then discards it. other must be adjacent to s.
+    	let merge = |mut other_unique: MemorySpan| {
+            let other = unsafe { other_unique.as_mut() };
+    		// Adjust s via base and npages and also in heap metadata.
+    		span.number_of_pages += other.number_of_pages;
+    		span.need_zero |= other.need_zero;
+    		if other.start_address.as_ptr() < span.start_address.as_ptr() {
+    			span.start_address = other.start_address;
+    			self.set_span(span.base().as_ptr(), span)
+    		} else {
+                let offset = span.number_of_pages * PAGE_SIZE - 1;
+                let new_base = unsafe { span.base().as_ptr().add(offset) };
+    			self.set_span(new_base, span);
+    		}
         //
     	// 	// If before or s are scavenged, then we need to scavenge the final coalesced span.
     	// 	needsScavenge = needsScavenge || other.scavenged || s.scavenged
@@ -349,7 +353,7 @@ impl LockedMemoryHeap {
     	// 	}
     	// 	other.state = mSpanDead
     	// 	h.spanalloc.free(unsafe.Pointer(other))
-    	// }
+    };
         //
     	// // realign is a helper which shrinks other and grows s such that their
     	// // boundary is on a physical page boundary.
@@ -426,6 +430,14 @@ impl LockedMemoryHeap {
     	// }
 
     }
+
+
+    // setSpan modifies the span map so spanOf(base) is s.
+    fn set_span(&mut self, base: *mut u8, span: *mut MemorySpanData) {
+    	// ai := arenaIndex(base)
+    	// h.arenas[ai.l1()][ai.l2()].spans[(base/pageSize)%pagesPerArena] = s
+    }
+
 
     // TODO I think this got removed in the Go codebase
     // pub fn busy_list(&mut self, number_of_pages: usize) -> &mut MemorySpanList {

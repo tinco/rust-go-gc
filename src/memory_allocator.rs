@@ -1,5 +1,6 @@
 use super::size_classes::*;
 
+pub const POINTER_SIZE: usize = std::mem::size_of::<&u8>();
 // Copyright 2014 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
@@ -161,4 +162,35 @@ pub const PAGE_SIZE : usize = 1 << PAGE_SHIFT;
 // 	//
 // 	// This should agree with minZeroPage in the compiler.
 // 	minLegalPointer uintptr = 4096
+// heapArenaBytes is the size of a heap arena. The heap
+// consists of mappings of size heapArenaBytes, aligned to
+// heapArenaBytes. The initial heap mapping is one arena.
+//
+// This is currently 64MB on 64-bit non-Windows and 4MB on
+// 32-bit and on Windows. We use smaller arenas on Windows
+// because all committed memory is charged to the process,
+// even if it's not touched. Hence, for processes with small
+// heaps, the mapped arena space needs to be commensurate.
+// This is particularly important with the race detector,
+// since it significantly amplifies the cost of committed
+// memory.
+
+pub const HEAP_ARENA_BYTES : usize = 1 << LOG_HEAP_ARENA_BYTES;
+
+// logHeapArenaBytes is log_2 of heapArenaBytes. For clarity,
+// prefer using heapArenaBytes where possible (we need the
+// constant to compute some other constants).
+pub const LOG_HEAP_ARENA_BYTES : usize = 0;
+    // (6+20)*(_64bit*(1-sys.GoosWindows)*(1-sys.GoosAix)) +
+    // (2+20)*(_64bit*sys.GoosWindows) +
+    // (2+20)*(1-_64bit) +
+    // (8+20)*sys.GoosAix
+
+// heapArenaBitmapBytes is the size of each heap arena's bitmap.
+pub const HEAP_ARENA_BITMAP_BYTES : usize = HEAP_ARENA_BYTES / (POINTER_SIZE * 8 / 2);
+
+pub const PAGES_PER_ARENA : usize = HEAP_ARENA_BYTES / PAGE_SIZE;
+
+
+
 // )
