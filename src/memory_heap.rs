@@ -466,6 +466,24 @@ pub fn arena_index(p: usize) -> ArenaIndex {
 
 type ArenaIndex = usize;
 
+pub fn arena_level_1(i: ArenaIndex) -> usize {
+    if ARENA_LEVEL_1_BITS == 0 {
+        // Let the compiler optimize this away if there's no
+        // L1 map.
+        0
+    } else {
+        (i as usize) >> ARENA_LEVEL_1_SHIFT
+    }
+}
+
+pub fn arena_level_2(i: ArenaIndex) -> usize {
+    if ARENA_LEVEL_1_BITS == 0 {
+        i as usize
+    } else {
+        (i as usize) & (1 << ARENA_LEVEL_2_BITS - 1)
+    }
+}
+
 pub struct LockedMemoryHeapGuard<'a>(pub MutexGuard<'a, Unique<LockedMemoryHeap>>);
 impl<'a> LockedMemoryHeapGuard<'a> {
     pub fn as_mut(&mut self) -> &mut LockedMemoryHeap {
