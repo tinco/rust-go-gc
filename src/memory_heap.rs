@@ -48,6 +48,79 @@ pub struct ProtectedMemoryHeap {
     pub spans: StaticVec<MemorySpan>,
     //
     pub pages_in_use: u64, // pages of spans in stats _MSpanInUse; R/W with mheap.lock
+
+    // arenas is the heap arena map. It points to the metadata for
+    // the heap for every arena frame of the entire usable virtual
+    // address space.
+    //
+    // Use arenaIndex to compute indexes into this array.
+    //
+    // For regions of the address space that are not backed by the
+    // Go heap, the arena map contains nil.
+    //
+    // Modifications are protected by mheap_.lock. Reads can be
+    // performed without locking; however, a given entry can
+    // transition from nil to non-nil at any time when the lock
+    // isn't held. (Entries never transitions back to nil.)
+    //
+    // In general, this is a two-level mapping consisting of an L1
+    // map and possibly many L2 maps. This saves space when there
+    // are a huge number of arena frames. However, on many
+    // platforms (even 64-bit), arenaL1Bits is 0, making this
+    // effectively a single-level map. In this case, arenas[0]
+    // will never be nil.
+    pub arenas: [*mut [*mut HeapArena; 1 << ARENA_LEVEL_2_BITS]; 1 << ARENA_LEVEL_1_BITS],
+}
+
+// A heapArena stores metadata for a heap arena. heapArenas are stored
+// outside of the Go heap and accessed via the mheap_.arenas index.
+//
+// This gets allocated directly from the OS, so ideally it should be a
+// multiple of the system page size. For example, avoid adding small
+// fields.
+//
+//go:notinheap
+pub struct HeapArena {
+    // bitmap stores the pointer/scalar bitmap for the words in
+    // this arena. See mbitmap.go for a description. Use the
+    // heapBits type to access this.
+    // bitmap [heapArenaBitmapBytes]byte
+
+    // spans maps from virtual address page ID within this arena to *mspan.
+    // For allocated spans, their pages map to the span itself.
+    // For free spans, only the lowest and highest pages map to the span itself.
+    // Internal pages map to an arbitrary span.
+    // For pages that have never been allocated, spans entries are nil.
+    //
+    // Modifications are protected by mheap.lock. Reads can be
+    // performed without locking, but ONLY from indexes that are
+    // known to contain in-use or stack spans. This means there
+    // must not be a safe-point between establishing that an
+    // address is live and looking it up in the spans array.
+    pub spans: [MemorySpan; PAGES_PER_ARENA],
+
+    // pageInUse is a bitmap that indicates which spans are in
+    // state mSpanInUse. This bitmap is indexed by page number,
+    // but only the bit corresponding to the first page in each
+    // span is used.
+    //
+    // Writes are protected by mheap_.lock.
+    pub page_in_use: [u8; PAGES_PER_ARENA / 8],
+
+    // pageMarks is a bitmap that indicates which spans have any
+    // marked objects on them. Like pageInUse, only the bit
+    // corresponding to the first page in each span is used.
+    //
+    // Writes are done atomically during marking. Reads are
+    // non-atomic and lock-free since they only occur during
+    // sweeping (and hence never race with writes).
+    //
+    // This is used to quickly find whole spans that can be freed.
+    //
+    // TODO(austin): It would be nice if this was uint64 for
+    // faster scanning, but we don't have 64-bit atomic bit
+    // operations.
+    pub page_marks: [u8; PAGES_PER_ARENA / 8],
 }
 
 // Main malloc heap.
@@ -225,6 +298,8 @@ impl MemoryHeap {
         let busy_span_lists: [MemorySpanList; MAX_MEMORY_HEAP_LIST] =
             array_init(|i| MemorySpanList::new());
 
+        let arenas: [*mut _; 1] = array_init(|i| std::ptr::null_mut());
+
         let memory_heap = MemoryHeap {
             lock: Mutex::new(Unique::empty()),
             protected: ProtectedMemoryHeap {
@@ -232,6 +307,7 @@ impl MemoryHeap {
                 busy: busy_span_lists,
                 busy_large: MemorySpanList::new(),
                 spans: StaticVec::new(0).expect("Could not allocate MemoryHeap spans"),
+                arenas: arenas,
             },
             arena_start: AtomicUsize::new(0),
             arena_used: AtomicUsize::new(0),
@@ -435,7 +511,10 @@ impl LockedMemoryHeap {
     // setSpan modifies the span map so spanOf(base) is s.
     fn set_span(&mut self, base: *mut u8, span: *mut MemorySpanData) {
         let arena_index = arena_index(base as usize);
-        // h.arenas[ai.l1()][ai.l2()].spans[(base/pageSize)%pagesPerArena] = s
+        let span_index = (base as usize / PAGE_SIZE) % PAGES_PER_ARENA;
+        let mut arena_1 = self.0.protected.arenas[arena_level_1(arena_index)];
+        let mut arena_2 = unsafe { *arena_1 }[arena_level_2(arena_index)];
+        unsafe { &mut *arena_2 }.spans[span_index] = unsafe { Unique::new_unchecked(span) };
     }
 
     // TODO I think this got removed in the Go codebase
