@@ -268,7 +268,7 @@ impl GC {
         }
     }
 
-    pub fn new_mark_bits(&mut self, number_of_elements: usize) -> std::ptr::Unique<u8> {
-        std::ptr::Unique::empty()
+    pub fn new_mark_bits(&mut self, number_of_elements: usize) -> std::ptr::NonNull<u8> {
+        unimplemented!()
     }
 }

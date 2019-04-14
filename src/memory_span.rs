@@ -1,7 +1,7 @@
 use super::memory_allocator::*;
 use super::size_classes::*;
 use page_size;
-use std::ptr::Unique;
+use std::ptr::NonNull;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
@@ -13,8 +13,8 @@ pub struct MemorySpanData {
     // list *mSpanList // For debugging. TODO: Remove.
     pub in_list: bool, // TODO replaces list ^
     //
-    pub start_address: Unique<u8>, // address of first byte of span aka s.base()
-    pub number_of_pages: usize,    // number of pages in span
+    pub start_address: NonNull<u8>, // address of first byte of span aka s.base()
+    pub number_of_pages: usize,     // number of pages in span
     //
     // manualFreeList gclinkptr // list of free objects in _MSpanManual spans
     //
@@ -69,8 +69,8 @@ pub struct MemorySpanData {
     // The sweep will free the old allocBits and set allocBits to the
     // gcmarkBits. The gcmarkBits are replaced with a fresh zeroed
     // out memory.
-    pub alloc_bits: Unique<u8>,
-    pub gc_mark_bits: Unique<u8>,
+    pub alloc_bits: NonNull<u8>,
+    pub gc_mark_bits: NonNull<u8>,
 
     // // sweep generation:
     // // if sweepgen == h->sweepgen - 2, the span needs sweeping
@@ -98,7 +98,7 @@ pub struct MemorySpanData {
                                // specials    *special   // linked list of special records sorted by offset.
 }
 
-pub type MemorySpan = Unique<MemorySpanData>;
+pub type MemorySpan = NonNull<MemorySpanData>;
 
 // An MSpan representing actual memory has state _MSpanInUse,
 // _MSpanManual, or _MSpanFree. Transitions between these states are
@@ -257,14 +257,11 @@ impl MemorySpanData {
                 .store(sweep_generation, Ordering::Relaxed);
         }
 
+        let non_null_self = MemorySpan::from(self);
         if number_freed > 0 && span_class.size_class() != 0 {
             // TODO accounting: c.local_nsmallfree[spc.sizeclass()] += uintptr(nfreed)
-            // TODO that we create a pointer with unchecked ownership of self in all of the below
-            // branches, probably means this whole function should take ownership.
-            // Maybe change the signature of this function to convey the transfer of ownership?
-            let unique_self = unsafe { Unique::new_unchecked(self) };
             result = gc.memory_heap.central[span_class.0 as usize].0.free_span(
-                unique_self,
+                non_null_self,
                 preserve,
                 was_empty,
             )
@@ -291,8 +288,7 @@ impl MemorySpanData {
             // 	s.limit = 0 // prevent mlookup from finding this span
             // 	sysFault(unsafe.Pointer(s.base()), size)
             // } else {
-            let unique_self = unsafe { Unique::new_unchecked(self) };
-            gc.memory_heap.free_span(unique_self, 1);
+            gc.memory_heap.free_span(non_null_self, 1);
             // }
             // TODO implement accounting
             // c.local_nlargefree++
@@ -302,10 +298,9 @@ impl MemorySpanData {
         if !result {
             // The span has been swept and is still in-use, so put
             // it on the swept in-use list.
-            let unique_self = unsafe { Unique::new_unchecked(self) };
             gc.memory_heap
                 .get_pushable_sweep_buffer(sweep_generation)
-                .push(unique_self);
+                .push(non_null_self);
         }
         result
     }
@@ -314,7 +309,7 @@ impl MemorySpanData {
         self.in_list
     }
 
-    pub fn base(&self) -> Unique<u8> {
+    pub fn base(&self) -> NonNull<u8> {
         return self.start_address;
     }
 

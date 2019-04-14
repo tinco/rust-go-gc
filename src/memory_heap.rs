@@ -411,16 +411,16 @@ impl LockedMemoryHeap {
             span.need_zero |= other.need_zero;
             if other.start_address.as_ptr() < span.start_address.as_ptr() {
                 span.start_address = other.start_address;
-                self.set_span(span.base().as_ptr(), span)
+                self.set_span(span.base().as_ptr(), MemorySpan::from(span));
             } else {
                 let offset = span.number_of_pages * PAGE_SIZE - 1;
                 let new_base = unsafe { span.base().as_ptr().add(offset) };
-                self.set_span(new_base, span);
+                self.set_span(new_base, MemorySpan::from(span));
             }
             //
-            // 	// If before or s are scavenged, then we need to scavenge the final coalesced span.
-            // 	needsScavenge = needsScavenge || other.scavenged || s.scavenged
-            // 	prescavenged += other.released()
+            // If before or s are scavenged, then we need to scavenge the final coalesced span.
+            // let needs_scavenge = needs_scavenge || other.scavenged || span.scavenged;
+            // prescavenged += other.released();
             //
             // 	// The size is potentially changing so the treap needs to delete adjacent nodes and
             // 	// insert back as a combined node.
@@ -509,12 +509,12 @@ impl LockedMemoryHeap {
     }
 
     // setSpan modifies the span map so spanOf(base) is s.
-    fn set_span(&mut self, base: *mut u8, span: *mut MemorySpanData) {
+    fn set_span(&mut self, base: *mut u8, span: MemorySpan) {
         let arena_index = arena_index(base as usize);
         let span_index = (base as usize / PAGE_SIZE) % PAGES_PER_ARENA;
         let mut arena_1 = self.0.protected.arenas[arena_level_1(arena_index)];
         let mut arena_2 = unsafe { *arena_1 }[arena_level_2(arena_index)];
-        unsafe { &mut *arena_2 }.spans[span_index] = unsafe { Unique::new_unchecked(span) };
+        unsafe { &mut *arena_2 }.spans[span_index] = span;
     }
 
     // TODO I think this got removed in the Go codebase
