@@ -9,7 +9,7 @@ use crate::memory_allocator::*;
 use array_init::array_init;
 use cache_line_size::*;
 use std::ops::{Deref, DerefMut};
-use std::ptr::Unique;
+use std::ptr::{NonNull, Unique};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Instant;
@@ -400,7 +400,8 @@ impl LockedMemoryHeap {
         // We scavenge s at the end after coalescing if s or anything
         // it merged with is marked scavenged.
         let needs_scavenge = false;
-        let prescavenged = span.released(); // number of bytes already scavenged.
+        let mut prescavenged = span.released(); // number of bytes already scavenged.
+        let span_non_null_ptr = unsafe { NonNull::new_unchecked(span as *mut MemorySpanData) };
 
         // merge is a helper which merges other into s, deletes references to other
         // in heap metadata, and then discards it. other must be adjacent to s.
@@ -411,24 +412,24 @@ impl LockedMemoryHeap {
             span.need_zero |= other.need_zero;
             if other.start_address.as_ptr() < span.start_address.as_ptr() {
                 span.start_address = other.start_address;
-                self.set_span(span.base().as_ptr(), MemorySpan::from(span));
+                self.set_span(span.base().as_ptr(), span_non_null_ptr)
             } else {
                 let offset = span.number_of_pages * PAGE_SIZE - 1;
                 let new_base = unsafe { span.base().as_ptr().add(offset) };
-                self.set_span(new_base, MemorySpan::from(span));
+                self.set_span(new_base, span_non_null_ptr)
             }
             //
             // If before or s are scavenged, then we need to scavenge the final coalesced span.
-            // let needs_scavenge = needs_scavenge || other.scavenged || span.scavenged;
-            // prescavenged += other.released();
-            //
-            // 	// The size is potentially changing so the treap needs to delete adjacent nodes and
-            // 	// insert back as a combined node.
-            // 	if other.scavenged {
-            // 		h.scav.removeSpan(other)
-            // 	} else {
-            // 		h.free.removeSpan(other)
-            // 	}
+            let needs_scavenge = needs_scavenge || other.scavenged || span.scavenged;
+            prescavenged += other.released();
+
+            // The size is potentially changing so the treap needs to delete adjacent nodes and
+            // insert back as a combined node.
+            // if other.scavenged {
+            // 	self.scav.removeSpan(other)
+            // } else {
+            // 	self.free.removeSpan(other)
+            // }
             // 	other.state = mSpanDead
             // 	h.spanalloc.free(unsafe.Pointer(other))
         };
