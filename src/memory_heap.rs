@@ -2,6 +2,7 @@ use super::memory_central::MemoryCentral;
 use super::memory_span;
 use super::memory_span::*;
 use super::memory_span_list::*;
+use super::memory_span_treap::*;
 use super::size_classes::*;
 use super::static_vec::*;
 use super::sweep_buffer::*;
@@ -18,6 +19,9 @@ pub const MAX_MEMORY_HEAP_LIST: usize = 1 << (20 - PAGE_SHIFT); // Maximum page 
 
 // ProtectedMemoryHeap contains all the fields of MemoryHeap that are protected by the mutex.
 pub struct ProtectedMemoryHeap {
+    pub free: MemorySpanTreap, // free and non-scavenged spans
+    pub scav: MemorySpanTreap, // free and scavenged spans
+
     // free      [_MaxMHeapList]mSpanList // free lists of given length up to _MaxMHeapList
     // freelarge mTreap                   // free treap of length >= _MaxMHeapList
     pub busy: [MemorySpanList; MAX_MEMORY_HEAP_LIST], // busy lists of large spans of given length
@@ -308,6 +312,8 @@ impl MemoryHeap {
                 busy_large: MemorySpanList::new(),
                 spans: StaticVec::new(0).expect("Could not allocate MemoryHeap spans"),
                 arenas: arenas,
+                free: MemorySpanTreap::new(),
+                scav: MemorySpanTreap::new(),
             },
             arena_start: AtomicUsize::new(0),
             arena_used: AtomicUsize::new(0),
@@ -425,11 +431,11 @@ impl LockedMemoryHeap {
 
             // The size is potentially changing so the treap needs to delete adjacent nodes and
             // insert back as a combined node.
-            // if other.scavenged {
-            // 	self.scav.removeSpan(other)
-            // } else {
-            // 	self.free.removeSpan(other)
-            // }
+            if other.scavenged {
+            	self.0.protected.scav.remove_span(other)
+            } else {
+            	self.0.protected.free.remove_span(other)
+            }
             // 	other.state = mSpanDead
             // 	h.spanalloc.free(unsafe.Pointer(other))
         };
